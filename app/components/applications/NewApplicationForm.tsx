@@ -4,8 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Takeover from '../Takeover';
-import { NEW_APPLICATION_STEPS } from '../../lib/waits';
-import { stashTailorFailure } from './handoff';
+import { READ_POSTING_STEPS } from '../../lib/waits';
 
 /**
  * One screen: the posting, and a button.
@@ -50,32 +49,19 @@ export default function NewApplicationForm({ detailCount }: { detailCount: numbe
       leaving = true;
 
       /*
-       * Straight on into tailoring, without asking again.
+       * Straight on into tailoring, without asking again — on the next screen.
        *
-       * Pressing "Tailor my resume" here and then "Tailor my resume" again on
-       * the next screen was the same question twice. The exception is a posting
-       * the extraction could not read — no description, or no named
-       * requirements — which means a pasted page of navigation chrome or a bare
-       * job title. Tailoring towards that spends a credit to produce a resume
-       * aimed at nothing, so that case still lands on the next screen and asks.
+       * Pressing "Tailor my resume" here and again on the application was the
+       * same question twice, so `tailor=1` asks that page to start on arrival.
+       * The resume is written there rather than here because that page can show
+       * what the posting asks for while it is being written, and this one has
+       * nothing worth looking at for thirty seconds.
+       *
+       * A posting the extraction could not read — no description, or no named
+       * requirements — goes without the flag and stops to ask, because tailoring
+       * towards that spends a credit on a resume aimed at nothing.
        */
-      if (!data.ready) {
-        router.push(`/applications/${applicationId}`);
-        return;
-      }
-
-      const tailored = await fetch(`/api/applications/${applicationId}/tailor`, { method: 'POST' });
-      if (!tailored.ok) {
-        // The application exists, so this goes to it rather than staying here —
-        // carrying the reason, because "out of credits" and "that timed out"
-        // need different things from the person reading them.
-        const failure = await tailored.json().catch(() => null);
-        stashTailorFailure(
-          applicationId,
-          failure?.error?.message ?? 'That did not finish. Your credit was not used — try again.',
-        );
-      }
-      router.push(`/applications/${applicationId}`);
+      router.push(`/applications/${applicationId}${data.ready ? '?tailor=1' : ''}`);
     } catch {
       setError('Your internet connection dropped. Please check your connection.');
     } finally {
@@ -84,15 +70,14 @@ export default function NewApplicationForm({ detailCount }: { detailCount: numbe
   }
 
   /*
-   * The whole journey behind one wait, rather than a spinner inside a button.
+   * Only the reading is a full-window wait now — about eight seconds.
    *
-   * What this replaces: a small spinner on the button for the extraction, a
-   * screen change, and then a full-screen wait for the tailor — three states
-   * for one press. Nothing on this form is worth leaving on screen while it
-   * runs, and everything that is pressable here would spend a second credit.
+   * The writing that follows happens on the application page, beside what the
+   * posting asks for, which cannot be shown until this has found out. Nothing on
+   * this form is worth leaving up meanwhile, and its button would start another.
    */
   if (busy) {
-    return <Takeover title="Writing your resume for this one." steps={NEW_APPLICATION_STEPS} done={false} />;
+    return <Takeover title="Reading the posting." steps={READ_POSTING_STEPS} done={false} />;
   }
 
   return (

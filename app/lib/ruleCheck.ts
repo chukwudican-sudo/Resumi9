@@ -28,7 +28,7 @@ interface Located {
  * and are already shared by two other walkers for exactly that reason. Only the
  * name and the contact block sit outside them.
  */
-function textOf(structure: ResumeStructure): Located[] {
+export function textOf(structure: ResumeStructure): Located[] {
   const out: Located[] = [];
   const add = (where: string, text?: string | null) => {
     const t = (text ?? '').trim();

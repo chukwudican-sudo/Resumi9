@@ -3,8 +3,10 @@ import ApplicationView from '../../components/applications/ApplicationView';
 import type { ApplicationStatus } from '../../components/applications/ApplicationRow';
 import type { ResumeStructure } from '../../lib/types';
 import { requireUserId } from '../../server/auth';
-import { getActiveRules, getApplication, getLatestResume, getResumeVersion, listResumeVersions } from '../../server/db/repository';
+import { getActiveRules, getApplication, getLatestResume, getProfile, getResumeVersion, listResumeVersions } from '../../server/db/repository';
 import { runChecks } from '../../lib/ruleCheck';
+import { postingReadyToTailor } from '../../lib/readiness';
+import { matchRequirements } from '../../lib/requirementMatch';
 import type { RuleCheck } from '../../lib/rules';
 
 /**
@@ -19,7 +21,7 @@ export default async function ApplicationPage({
   searchParams,
 }: {
   params: { id: string };
-  searchParams: { v?: string };
+  searchParams: { v?: string; tailor?: string };
 }) {
   const userId = await requireUserId();
 
@@ -32,10 +34,13 @@ export default async function ApplicationPage({
   const asked = Number(searchParams?.v);
   const wanted = Number.isFinite(asked) && asked > 0 ? asked : null;
 
-  const [latest, versions, rules] = await Promise.all([
+  const [latest, versions, rules, profile] = await Promise.all([
     getLatestResume(userId, params.id),
     listResumeVersions(userId, params.id),
     getActiveRules(userId),
+    // For what the posting asks for against what the profile already says,
+    // shown while a tailor writes. Read here so it arrives with the page.
+    getProfile(userId),
   ]);
 
   // An unknown version falls back rather than 404s: a stale link should show
@@ -47,11 +52,30 @@ export default async function ApplicationPage({
 
   const resume = viewed;
   const isLatest = !resume || !latest || resume.version === latest.version;
+  const requirements = (record.posting?.requirements as string[]) ?? [];
+
+  /*
+   * Whether to start tailoring on arrival.
+   *
+   * `tailor=1` is set once, by the posting form, so this fires only on the way in
+   * from pasting a posting — not on a link, a refresh (the page takes the flag
+   * out of the address bar before it starts), or a walk back through history.
+   * `!latest` is the guard that matters most: arriving at an application that
+   * already has a resume must never spend a credit rewriting it. The posting is
+   * checked here as well as in the form, because a URL is something anybody
+   * can type.
+   */
+  const startTailor =
+    searchParams?.tailor === '1' &&
+    !latest &&
+    postingReadyToTailor({ description: record.posting?.description ?? null, requirements });
 
   return (
     <ApplicationView
       applicationId={params.id}
       isLatest={isLatest}
+      startTailor={startTailor}
+      requirementMatch={matchRequirements((profile?.resumeStructure ?? null) as ResumeStructure | null, requirements)}
       /*
        * Checked here, not stored.
        *

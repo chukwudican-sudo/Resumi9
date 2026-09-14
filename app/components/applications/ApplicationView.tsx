@@ -6,8 +6,7 @@ import { useRouter } from 'next/navigation';
 import type { ResumeStructure } from '../../lib/types';
 import DownloadPdf from './DownloadPdf';
 import Stages from '../Stages';
-import Takeover from '../Takeover';
-import { INSTRUCT_STEPS, REASSURE, TAILOR_STEPS } from '../../lib/waits';
+import { INSTRUCT_STEPS, REASSURE } from '../../lib/waits';
 import type { RuleResult } from '../../lib/rules';
 import StatusPicker from './StatusPicker';
 import VersionPicker, { type ResumeVersion } from './VersionPicker';
@@ -15,12 +14,23 @@ import type { ApplicationStatus } from './ApplicationRow';
 import PdfPreview from './PdfPreview';
 import StrengthenPanel from './StrengthenPanel';
 import { restoreResumeVersion } from '../../server/actions';
-import { takeTailorFailure } from './handoff';
+import TailorWait from './TailorWait';
+import type { RequirementMatch } from '../../lib/requirementMatch';
 
 interface Props {
   applicationId: string;
   /** False while an older version is being read. Then the screen is read-only. */
   isLatest: boolean;
+  /**
+   * Start tailoring on arrival.
+   *
+   * True only on the way in from the posting form, for a posting that read
+   * cleanly, into an application with no resume yet. Decided on the server,
+   * which holds all three facts — see applications/[id]/page.tsx.
+   */
+  startTailor: boolean;
+  /** What the posting asks for, split by whether the profile already says it. */
+  requirementMatch: RequirementMatch;
   /** How each of the person's rules fared on this version. Computed, not stored. */
   ruleResults: RuleResult[];
   status: ApplicationStatus;
@@ -43,9 +53,13 @@ interface Props {
   versions: ResumeVersion[];
 }
 
-export default function ApplicationView({ applicationId, isLatest, ruleResults, status, posting, resume, versions }: Props) {
+export default function ApplicationView({ applicationId, isLatest, startTailor, requirementMatch, ruleResults, status, posting, resume, versions }: Props) {
   const router = useRouter();
-  const [tailoring, setTailoring] = useState(false);
+  // Starts true when arriving to tailor, so the first paint is already the wait.
+  // Starting false put "Ready when you are." and a live button on screen for
+  // the frame before the effect below runs — a button that, pressed, buys a
+  // second resume.
+  const [tailoring, setTailoring] = useState(startTailor);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'review' | 'posting'>('review');
   const [instruction, setInstruction] = useState('');
@@ -108,40 +122,34 @@ export default function ApplicationView({ applicationId, isLatest, ruleResults, 
   }
 
   /*
-   * Why the first tailor did not happen, when it was tried on the way in.
+   * Tailoring on arrival, when the posting form asked for it.
    *
-   * The form tailors before it navigates here, so a failure happens on a screen
-   * the person is already leaving. Without this they arrive at "Ready when you
-   * are." on a resume they just asked for and did not get, which reads as
-   * though nothing was attempted at all.
+   * The form reads the posting behind a short full-window wait, then comes here
+   * with `?tailor=1`, so the resume is written while this page shows what the
+   * posting asks for — rather than behind a loading screen with nothing on it.
+   * The server decided whether to honour the flag; see `startTailor`.
    *
-   * Read once and cleared, so a refresh does not replay a stale complaint.
+   * The flag leaves the address bar BEFORE the request goes out, through the
+   * browser's own history rather than the router, so it costs no server render.
+   * That line is what stops a refresh mid-tailor landing back here still
+   * carrying `tailor=1` with nothing saved yet, and buying a second resume.
+   *
+   * `fired` covers the other double: React's development StrictMode runs every
+   * effect twice, and a second run here is a second credit.
    */
+  const fired = useRef(false);
   useEffect(() => {
-    const failure = takeTailorFailure(applicationId);
-    if (failure) setError(failure);
-  }, [applicationId]);
+    if (!startTailor || fired.current) return;
+    fired.current = true;
+    window.history.replaceState(null, '', `/applications/${applicationId}`);
+    void tailor();
+    // `tailor` is redeclared every render; `fired` makes this once per arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startTailor, applicationId]);
 
   // One flag for "something is happening", covering both the request and the
   // re-render that follows it.
   const busy = tailoring || pending;
-
-  // Tailoring produces the entire workspace from nothing — three model calls on
-  // a stale profile — so there is nothing behind it worth leaving on screen.
-  if (busy) {
-    return (
-      <Takeover
-        title="Rewriting your resume for this one."
-        steps={TAILOR_STEPS}
-        done={!busy}
-        // No estimate here on purpose. The steps already say what is happening
-        // and they move; a static line under moving steps either repeats them or
-        // puts a number on it, and a number this large makes the wait feel
-        // longer than it is. The 25-second line still catches the long tail,
-        // and only appears when something is genuinely unusual.
-      />
-    );
-  }
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-ground font-sans text-ink">
@@ -156,7 +164,15 @@ export default function ApplicationView({ applicationId, isLatest, ruleResults, 
             on a phone, where the browser's arrow lives in a toolbar that hides
             itself, and in an installed window, where there is no toolbar at all.
           */}
-          <Link href="/applications" className="flex items-center gap-2.5 transition hover:opacity-70">
+          <Link
+            href="/applications"
+            // Inert while a tailor runs. Leaving is harmless in itself, but coming
+            // back before it finishes lands on "Ready when you are." with a live
+            // button, and pressing that spends a second credit on the same resume.
+            aria-disabled={busy || undefined}
+            tabIndex={busy ? -1 : undefined}
+            className={`flex items-center gap-2.5 transition hover:opacity-70 ${busy ? 'pointer-events-none' : ''}`}
+          >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#2F5D50" strokeWidth="1.5" strokeLinecap="round">
               <path d="M12 3v18M3 12h18M6 6l12 12M18 6L6 18" />
             </svg>
@@ -170,7 +186,7 @@ export default function ApplicationView({ applicationId, isLatest, ruleResults, 
           </div>
         </div>
 
-        {resume ? (
+        {resume && !busy ? (
           <div className="flex items-center gap-2.5">
             <VersionPicker
               applicationId={applicationId}
@@ -183,7 +199,17 @@ export default function ApplicationView({ applicationId, isLatest, ruleResults, 
         ) : null}
       </div>
 
-      {!resume ? (
+      {busy ? (
+        /*
+         * The wait, on the page rather than over it.
+         *
+         * What the posting asks for is already known — it was read before this
+         * started — so it is on screen while the resume is being written, instead
+         * of a loading screen with nothing on it. Same columns as the finished
+         * page, so nothing jumps when the resume lands.
+         */
+        <TailorWait match={requirementMatch} />
+      ) : !resume ? (
         <div className="flex flex-grow items-center justify-center px-6 py-16">
           <div className="max-w-[520px] text-center">
             <h1 className="font-serif text-[38px] leading-[1.1]">Ready when you are.</h1>
@@ -192,17 +218,15 @@ export default function ApplicationView({ applicationId, isLatest, ruleResults, 
               everything true, and putting what matters for this role first.
             </p>
 
-            {busy ? null : (
-              <button
-                type="button"
-                onClick={tailor}
-                className="mt-8 rounded bg-accent px-8 py-4 text-[15px] font-medium text-ground transition hover:bg-accent-hover"
-              >
-                Tailor my resume
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={tailor}
+              className="mt-8 rounded bg-accent px-8 py-4 text-[15px] font-medium text-ground transition hover:bg-accent-hover"
+            >
+              Tailor my resume
+            </button>
 
-            {posting.requirements.length > 0 && !busy ? (
+            {posting.requirements.length > 0 ? (
               <div className="mt-10 text-left">
                 <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">
                   What they ask for
@@ -571,7 +595,7 @@ export default function ApplicationView({ applicationId, isLatest, ruleResults, 
                   disabled={busy || editing}
                   className="w-full rounded border border-rule-field bg-ground-surface py-3 text-[13.5px] text-ink-prose transition hover:border-accent disabled:opacity-50"
                 >
-                  {busy ? 'Rewriting…' : 'Tailor again · 1 credit'}
+                  Tailor again · 1 credit
                 </button>
                 {error ? <p className="text-[13px] text-flag">{error}</p> : null}
               </div>

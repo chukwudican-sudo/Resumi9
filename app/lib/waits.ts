@@ -52,47 +52,36 @@ export const DOWNLOAD_WHY =
   'Your resume has changed since it was last tidied up, so that happens first.';
 
 /**
- * Tailoring.
+ * Tailoring, once the posting has been read.
  *
- * It used to open with "Tidying your resume first", because the editorial pass
- * ran here — two model calls and some twenty-five serialised database round
- * trips, in front of somebody waiting on a job application. It runs when you
- * press Done on the resume page now, so this is one model call.
+ * It no longer opens with "Reading the posting": on every path into a tailor
+ * the posting was read before this began — by the form's own short wait on the
+ * way in, or when the application was first saved. Ticking it again here would
+ * be claiming work that is not happening.
  *
- * The last two steps are real and separate from that call: the guard that
- * checks no entry was dropped or invented, and the write.
- *
- * The three in the middle are that one call shown as three. They are the three
- * things it is doing — read the posting, match it against the profile, rewrite
- * around it — and nothing can see inside to know when one ends. A single line
- * sitting still for thirty seconds is the failure this exists to avoid.
+ * The last two steps are real and separate from the model call: the guard that
+ * checks nothing was dropped or invented, and the write. The two before them
+ * are that one call shown as two. Nothing can see inside it to know when one
+ * part ends, and one line sitting still for thirty seconds reads as dead.
  */
 export const TAILOR_STEPS: Step[] = [
-  { label: 'Reading the posting', past: 'Read the posting', ms: 6_000 },
-  { label: "Matching it against what you've done", past: "Matched it against what you've done", ms: 9_000 },
-  { label: 'Rewriting your experience', past: 'Rewrote your experience', ms: 12_000 },
-  { label: 'Checking nothing was invented', past: 'Checked nothing was invented', ms: 3_000 },
+  { label: "Matching it against what you've done", past: "Matched it against what you've done", ms: 7_000 },
+  { label: 'Rewriting your experience', past: 'Rewrote your experience', ms: 15_000 },
+  { label: 'Checking nothing was invented', past: 'Checked nothing was invented', ms: 4_000 },
   { label: 'Saving this version', past: 'Saved this version', ms: 2_000 },
 ];
 
 /**
- * Pasting a posting through to a finished resume — two calls, one wait.
+ * The short wait on the way in: reading a pasted posting.
  *
- * The first step is a real separate call (the extraction that reads the
- * posting); the rest are the tailor. It is one list because it is one journey:
- * pressing a button, watching a spinner on it, landing on a second screen and
- * pressing a second button was asking the same question twice.
- *
- * Paced a little longer than TAILOR_STEPS because there is genuinely more work
- * behind it — an extraction of about eight seconds in front of a tailor of
- * about thirty.
+ * Only this part is a full-window wait now, and it is about eight seconds. The
+ * tailor that follows runs on the application page itself, beside what the
+ * posting asks for — which cannot be shown until this has finished, because
+ * this is what finds out.
  */
-export const NEW_APPLICATION_STEPS: Step[] = [
-  { label: 'Reading the posting', past: 'Read the posting', ms: 9_000 },
-  { label: "Matching it against what you've done", past: "Matched it against what you've done", ms: 9_000 },
-  { label: 'Rewriting your experience', past: 'Rewrote your experience', ms: 13_000 },
-  { label: 'Checking nothing was invented', past: 'Checked nothing was invented', ms: 3_000 },
-  { label: 'Saving this version', past: 'Saved this version', ms: 2_000 },
+export const READ_POSTING_STEPS: Step[] = [
+  { label: 'Reading the posting', past: 'Read the posting', ms: 4_000 },
+  { label: 'Pulling out what they ask for', past: 'Pulled out what they ask for', ms: 2_000 },
 ];
 
 /** One instruction against an existing resume. */
