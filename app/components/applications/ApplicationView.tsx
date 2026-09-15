@@ -15,6 +15,7 @@ import PdfPreview from './PdfPreview';
 import StrengthenPanel from './StrengthenPanel';
 import { restoreResumeVersion } from '../../server/actions';
 import TailorWait from './TailorWait';
+import { useConfirm } from '../undo/ConfirmProvider';
 import type { RequirementMatch } from '../../lib/requirementMatch';
 
 interface Props {
@@ -55,6 +56,7 @@ interface Props {
 
 export default function ApplicationView({ applicationId, isLatest, startTailor, requirementMatch, ruleResults, status, posting, resume, versions }: Props) {
   const router = useRouter();
+  const ask = useConfirm();
   // Starts true when arriving to tailor, so the first paint is already the wait.
   // Starting false put "Ready when you are." and a live button on screen for
   // the frame before the effect below runs — a button that, pressed, buys a
@@ -151,6 +153,26 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
   // re-render that follows it.
   const busy = tailoring || pending;
 
+  /**
+   * Done: back to the list.
+   *
+   * Every applied edit is already saved as a version, so nothing on this page
+   * needs saving on the way out. The one thing that can be lost is an
+   * instruction typed into the composer and never applied — so it asks then,
+   * and only then.
+   */
+  async function leave() {
+    if (instruction.trim()) {
+      const discard = await ask({
+        title: 'Leave without applying?',
+        body: 'The change you typed has not been applied to this resume yet.',
+        action: 'Discard',
+      });
+      if (!discard) return;
+    }
+    router.push('/applications');
+  }
+
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-ground font-sans text-ink">
       <div className="flex h-[62px] shrink-0 items-center justify-between border-b border-rule bg-ground-surface px-8">
@@ -188,13 +210,23 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
 
         {resume && !busy ? (
           <div className="flex items-center gap-2.5">
+            <StatusPicker applicationId={applicationId} status={status} />
             <VersionPicker
               applicationId={applicationId}
               current={resume.version}
               versions={versions}
             />
             <DownloadPdf applicationId={applicationId} version={resume.version} />
-            <StatusPicker applicationId={applicationId} status={status} />
+            {/* Held while an edit applies: leaving mid-edit lands back on a
+                version that is about to be replaced. */}
+            <button
+              type="button"
+              onClick={leave}
+              disabled={editing}
+              className="rounded bg-accent px-4 py-2 text-[13px] font-medium text-ground transition hover:bg-accent-hover disabled:opacity-50"
+            >
+              Done
+            </button>
           </div>
         ) : null}
       </div>
