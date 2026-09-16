@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { pagesFromLog } from '../lib/texLog';
 
 const run = promisify(execFile);
 
@@ -45,7 +46,7 @@ export class LatexCompileError extends Error {
  * unset and the local binary is used instead, which is what lets development
  * work without deploying anything.
  */
-async function compileRemotely(latex: string, url: string, token: string): Promise<Buffer> {
+async function compileRemotely(latex: string, url: string, token: string): Promise<CompiledPdf> {
   const response = await fetch(`${url.replace(/\/+$/, '')}/render`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -72,10 +73,31 @@ async function compileRemotely(latex: string, url: string, token: string): Promi
     throw new LatexCompileError(`Compile service returned ${response.status}`, detail, kind);
   }
 
-  return Buffer.from(await response.arrayBuffer());
+  // A service older than this build sends no count, and that is a fact rather
+  // than a failure: the PDF is still the PDF. Everything downstream says "not
+  // measured" instead of refusing to save.
+  const counted = Number(response.headers.get('X-Page-Count'));
+  return {
+    pdf: Buffer.from(await response.arrayBuffer()),
+    pages: Number.isInteger(counted) && counted > 0 ? counted : null,
+  };
 }
 
-export async function compileToPdf(latex: string): Promise<Buffer> {
+/** A compiled resume, and how long it actually came out. */
+export interface CompiledPdf {
+  pdf: Buffer;
+  /** Null when nobody counted — never a guess. */
+  pages: number | null;
+}
+
+/**
+ * The PDF and its real page count.
+ *
+ * The count exists because the model's was wrong every time it was checked, and
+ * because a person's "keep it to one page" rule has to be judged against the
+ * document rather than against an estimate of it.
+ */
+export async function compileWithMeta(latex: string): Promise<CompiledPdf> {
   const url = process.env.COMPILE_SERVICE_URL;
   const token = process.env.COMPILE_TOKEN;
 
@@ -95,8 +117,19 @@ export async function compileToPdf(latex: string): Promise<Buffer> {
   return compileLocally(latex);
 }
 
+/**
+ * The PDF alone, for the callers that only ever wanted bytes.
+ *
+ * Kept so the download and preview routes are untouched by the page count:
+ * neither has any use for it, and a signature change there would be churn for
+ * nothing.
+ */
+export async function compileToPdf(latex: string): Promise<Buffer> {
+  return (await compileWithMeta(latex)).pdf;
+}
+
 /** The development path: the binary on this machine. */
-async function compileLocally(latex: string): Promise<Buffer> {
+async function compileLocally(latex: string): Promise<CompiledPdf> {
   const dir = await mkdtemp(join(tmpdir(), 'resumi-'));
   try {
     const tex = join(dir, 'main.tex');
@@ -104,8 +137,13 @@ async function compileLocally(latex: string): Promise<Buffer> {
 
     // tectonic must be on PATH; TECTONIC_BIN overrides for odd installs.
     const bin = process.env.TECTONIC_BIN || 'tectonic';
+    let chatter = '';
     try {
-      await run(bin, ['-X', 'compile', tex, '--outdir', dir, '--outfmt', 'pdf'], {
+      // --print puts the engine's own "Output written on … (N pages" line on
+      // stdout, and --keep-logs leaves it in main.log as well. One of the two
+      // is always there, and between them they are the only honest answer to
+      // how long the resume actually came out.
+      const finished = await run(bin, ['-X', 'compile', tex, '--outdir', dir, '--outfmt', 'pdf', '--keep-logs', '--print'], {
         cwd: dir,
         // The same ceiling as production, not a longer one.
       //
@@ -115,6 +153,7 @@ async function compileLocally(latex: string): Promise<Buffer> {
       timeout: COMPILE_LIMIT_MS,
         maxBuffer: 10 * 1024 * 1024,
       });
+      chatter = `${finished.stdout ?? ''}\n${finished.stderr ?? ''}`;
     } catch (err) {
       if ((err as { code?: string }).code === 'ENOENT') {
         throw new LatexCompileError(
@@ -133,7 +172,14 @@ async function compileLocally(latex: string): Promise<Buffer> {
       );
     }
 
-    return readFile(join(dir, 'main.pdf'));
+    // The log is the belt to --print's braces: whichever of the two carries the
+    // line, the count is the same. A missing log is not an error — the PDF is
+    // still the PDF, and "not measured" is a thing the app knows how to say.
+    const log = await readFile(join(dir, 'main.log'), 'utf8').catch(() => '');
+    return {
+      pdf: await readFile(join(dir, 'main.pdf')),
+      pages: pagesFromLog(`${chatter}\n${log}`),
+    };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

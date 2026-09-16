@@ -56,6 +56,20 @@ function authorised(header) {
 const CACHE_MAX = Number(process.env.COMPILE_CACHE_MAX || 200);
 const cache = new Map();
 
+/**
+ * How many pages the engine said it wrote.
+ *
+ * The same line and the same pattern as `app/lib/texLog.ts` — duplicated on
+ * purpose, because this service has no dependencies and no build step, and one
+ * import would give it both. If the pattern ever changes, it changes twice.
+ */
+function pagesFromLog(chatter) {
+  const found = /Output written on [^(]*\((\d+)\s+pages?/i.exec(chatter || '');
+  if (!found) return null;
+  const pages = Number(found[1]);
+  return Number.isInteger(pages) && pages > 0 ? pages : null;
+}
+
 function remember(key, pdf) {
   // Oldest out first. Map keeps insertion order, so the first key is the least
   // recently added.
@@ -82,15 +96,27 @@ async function compile(latex) {
   try {
     const tex = join(dir, 'main.tex');
     await writeFile(tex, latex, 'utf8');
-    await run('tectonic', ['-X', 'compile', tex, '--outdir', dir, '--outfmt', 'pdf'], {
-      cwd: dir,
-      timeout: TIMEOUT_MS,
-      maxBuffer: 10 * 1024 * 1024,
-      // The bundle is baked into the image, so a compile needs no network. If
-      // tectonic reaches for one anyway, something is wrong with the image.
-      env: { ...process.env, HOME: process.env.HOME || '/home/app' },
-    });
-    return await readFile(join(dir, 'main.pdf'));
+    // --print and --keep-logs are what make the page count knowable. The app
+    // cannot work it out from the bytes — page objects hide inside compressed
+    // object streams — and it needs it to judge somebody's "keep it to one
+    // page" rule against the document rather than against a guess.
+    const finished = await run(
+      'tectonic',
+      ['-X', 'compile', tex, '--outdir', dir, '--outfmt', 'pdf', '--keep-logs', '--print'],
+      {
+        cwd: dir,
+        timeout: TIMEOUT_MS,
+        maxBuffer: 10 * 1024 * 1024,
+        // The bundle is baked into the image, so a compile needs no network. If
+        // tectonic reaches for one anyway, something is wrong with the image.
+        env: { ...process.env, HOME: process.env.HOME || '/home/app' },
+      },
+    );
+    const log = await readFile(join(dir, 'main.log'), 'utf8').catch(() => '');
+    return {
+      pdf: await readFile(join(dir, 'main.pdf')),
+      pages: pagesFromLog(`${finished.stdout || ''}\n${finished.stderr || ''}\n${log}`),
+    };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -134,23 +160,29 @@ const server = createServer((req, res) => {
     const key = createHash('sha256').update(latex).digest('hex');
     const cached = recall(key);
     if (cached) {
+      // The count is cached with the bytes. Storing only the PDF would mean the
+      // first request knew how long the resume was and every one after it did
+      // not — and a resume is read far more often than it is compiled, so the
+      // cached answer is the usual answer.
       res.writeHead(200, {
         'Content-Type': 'application/pdf',
-        'Content-Length': String(cached.length),
+        'Content-Length': String(cached.pdf.length),
         'X-Compile-Cache': 'hit',
+        ...(cached.pages ? { 'X-Page-Count': String(cached.pages) } : {}),
       });
-      res.end(cached);
+      res.end(cached.pdf);
       return;
     }
 
     inFlight += 1;
     try {
-      const pdf = await compile(latex);
-      remember(key, pdf);
+      const { pdf, pages } = await compile(latex);
+      remember(key, { pdf, pages });
       res.writeHead(200, {
         'Content-Type': 'application/pdf',
         'Content-Length': String(pdf.length),
         'X-Compile-Cache': 'miss',
+        ...(pages ? { 'X-Page-Count': String(pages) } : {}),
       });
       res.end(pdf);
     } catch (err) {
