@@ -1902,6 +1902,14 @@ export async function saveResume(
     log: string[];
     warnings: string[];
     estimatedPages: number | null;
+    /**
+     * What the compiler said, when it was asked in time.
+     *
+     * Optional because the measurement is the first thing dropped when a
+     * request runs short of budget: a finished resume is never thrown away for
+     * want of a number, and null reads as "not measured" everywhere it lands.
+     */
+    pageCount?: number | null;
     /** 'instructed' when this version came from somebody's own instruction. */
     mode?: string;
   },
@@ -1920,6 +1928,7 @@ export async function saveResume(
     log: data.log,
     warnings: data.warnings,
     estimatedPages: data.estimatedPages,
+    pageCount: data.pageCount ?? null,
     version: (previous?.version ?? 0) + 1,
     parentResumeId: previous?.id ?? null,
     status: 'complete',

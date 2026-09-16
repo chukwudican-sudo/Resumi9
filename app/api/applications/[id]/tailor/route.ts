@@ -10,6 +10,8 @@ import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
 import { annotate, resolveTailored } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
+import { renderResumeLatex } from '../../../../lib/latexEngine';
+import { compileWithMeta } from '../../../../server/pdf';
 import {
   getActiveRules,
   getUser,
@@ -218,6 +220,27 @@ export async function POST(_request: Request, { params }: { params: { id: string
       console.error(`[Resumi9] Tailoring dropped ${restored} entr${restored === 1 ? 'y' : 'ies'}; restored from the profile.`);
     }
 
+    /*
+     * How long it actually came out, if there is time to find out.
+     *
+     * Last, and optional, because of the rule that governs everything after the
+     * model call: a finished resume is never thrown away for want of a number.
+     * A compile is about a second locally and one or two through the service,
+     * so it is only skipped when a tailor has already eaten the budget — and
+     * then `pageCount` is null, which reads as "not measured" rather than as a
+     * resume that broke somebody's page rule.
+     */
+    let pageCount: number | null = null;
+    if (deadline - Date.now() > 6_000) {
+      try {
+        pageCount = (await compileWithMeta(renderResumeLatex(guarded.structure))).pages;
+      } catch (err) {
+        // The resume is fine; only the measurement failed. It is not worth a
+        // person's tailor, and the log is where this belongs.
+        console.error('[Resumi9] Could not measure the tailored resume:', err);
+      }
+    }
+
     const resumeId = await saveResume(userId, params.id, {
       structure: guarded.structure,
       matchScore: toolInput.matchScore ?? null,
@@ -248,8 +271,10 @@ export async function POST(_request: Request, { params }: { params: { id: string
       log: [...surfaced.log, ...honest.log, ...(toolInput.log ?? [])],
       warnings: [...surfaced.warnings, ...honest.warnings, ...(toolInput.warnings ?? [])],
       // The column exists and nothing has ever read it back, so the model is
-      // no longer asked to produce a number for it.
+      // no longer asked to produce a number for it. `pageCount` is the real
+      // one, and the only one anything reads.
       estimatedPages: null,
+      pageCount,
     });
 
     // Said out loud rather than done quietly: polishing regroups skills and

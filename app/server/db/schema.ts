@@ -363,7 +363,22 @@ export const resumes = pgTable('resumes', {
   missingRequirements: jsonb('missing_requirements').notNull().default([]),
   log: jsonb('log').notNull().default([]),
   warnings: jsonb('warnings').notNull().default([]),
+  /**
+   * What the model guessed, back when it was asked.
+   *
+   * Left alone rather than reused: instruct rows still hold old guesses, and a
+   * column holding two different kinds of number — some measured, some
+   * imagined — cannot be read honestly by anything.
+   */
   estimatedPages: integer('estimated_pages'),
+  /**
+   * How many pages the compiler actually wrote, or null when nobody counted.
+   *
+   * Null is ordinary: the measurement is skipped when a request runs short of
+   * budget, and an older compile service sends no count at all. A page rule
+   * reads null as "not measured" and never as a failure.
+   */
+  pageCount: integer('page_count'),
   version: integer('version').notNull().default(1),
   parentResumeId: text('parent_resume_id'),
   /** running | complete | failed — what the recovery banner reads instead of localStorage. */

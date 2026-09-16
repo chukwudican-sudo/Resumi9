@@ -57,6 +57,13 @@
       "when": 1789530139143,
       "tag": "0007_tired_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789578642778,
+      "tag": "0008_rainy_sandman",
+      "breakpoints": true
     }
   ]
 }

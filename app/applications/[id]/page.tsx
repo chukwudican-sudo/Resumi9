@@ -89,6 +89,11 @@ export default async function ApplicationPage({
           ? runChecks(
               viewed.structure as ResumeStructure,
               rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
+              // What the compiler said when this version was written. Null on
+              // every version made before it was measured, and on any tailor
+              // that ran short of budget — a page rule then reads as guidance,
+              // never as a failure somebody cannot account for.
+              { pages: viewed.pageCount },
             )
           : []
       }
