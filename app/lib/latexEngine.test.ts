@@ -157,6 +157,26 @@ function run() {
   const noTech = renderResumeLatex({ ...fixture, projects: [{ ...fixture.projects[0], tech: '' }] });
   assert.ok(!noTech.includes('$|$ \\emph{}'), 'empty tech should drop the separator, not render it empty');
 
+  // (g) an entry's heading stays with its first bullet.
+  //
+  // A real resume ended a page with "Founder & Digital Creator / Kudi Kitchen"
+  // and started the next with its only bullet. beginpenalty forbids the break
+  // inside the bullet list; \nopagebreak holds the heading row to what follows.
+  // Both come from enumitem, which the preamble already loads — the compile
+  // service has no network during a compile and could not fetch a new package.
+  const withEntries = renderResumeLatex(fixture);
+  assert.ok(
+    withEntries.includes('\\begin{itemize}[beginpenalty=10000]'),
+    'bullet lists must forbid a break before their first item',
+  );
+  for (const macro of ['\\resumeSubheading', '\\resumeProjectHeading']) {
+    const definition = withEntries.slice(withEntries.indexOf(`\\newcommand{${macro}}`));
+    assert.ok(
+      definition.slice(0, definition.indexOf('\n}')).includes('\\nopagebreak'),
+      `${macro} must hold its heading to the bullets under it`,
+    );
+  }
+
   console.log('latexEngine.test.ts: all assertions passed');
 }
 

@@ -139,7 +139,19 @@ function mentions(haystack: string, term: string): boolean {
  * written today is applied to a resume tailored last week, and nothing can go
  * stale.
  */
-export function runChecks(structure: ResumeStructure, rules: CheckableRule[]): RuleResult[] {
+export function runChecks(
+  structure: ResumeStructure,
+  rules: CheckableRule[],
+  /**
+   * What the rendered PDF actually came to, when it has been measured.
+   *
+   * Null means nobody counted — the compile service is older than this build,
+   * or the measurement did not fit in the request's budget. A rule about length
+   * then reads as guidance, never as a failure: telling somebody their resume
+   * broke a rule because the app did not check is worse than saying nothing.
+   */
+  measured: { pages?: number | null } = {},
+): RuleResult[] {
   const fields = textOf(structure);
   const bullets = bulletsOf(structure);
 
@@ -147,34 +159,61 @@ export function runChecks(structure: ResumeStructure, rules: CheckableRule[]): R
     const base = { ruleId: rule.id, text: rule.text };
     if (!rule.check) return { ...base, verdict: 'guidance' };
 
-    if (rule.check.kind === 'forbidden_text') {
-      for (const term of rule.check.terms) {
-        const hit = fields.find((f) => mentions(f.text, term));
-        if (hit) {
-          return {
-            ...base,
-            verdict: 'fail',
-            evidence: `“${term}” is in ${hit.where}.`,
-            fix: `Rewrite ${hit.where} without the word “${term}”.`,
-          };
+    /*
+     * Every kind is handled by name, and an unrecognised one is guidance.
+     *
+     * This was an if for forbidden_text and then a fall-through that treated
+     * everything else as a bullet-length check, reading `check.limit` off it.
+     * The moment a third kind existed, a one-page rule would have failed every
+     * bullet longer than one character — and `check` is untyped jsonb, so a
+     * kind written by a newer build can reach an older one at any time.
+     */
+    switch (rule.check.kind) {
+      case 'forbidden_text': {
+        for (const term of rule.check.terms) {
+          const hit = fields.find((f) => mentions(f.text, term));
+          if (hit) {
+            return {
+              ...base,
+              verdict: 'fail',
+              evidence: `“${term}” is in ${hit.where}.`,
+              fix: `Rewrite ${hit.where} without the word “${term}”.`,
+            };
+          }
         }
+        return { ...base, verdict: 'pass' };
       }
-      return { ...base, verdict: 'pass' };
-    }
 
-    const limit = rule.check.limit;
-    const over = bullets.filter((b) => b.text.length > limit);
-    if (over.length) {
-      return {
-        ...base,
-        verdict: 'fail',
-        evidence:
-          over.length === 1
-            ? `One bullet runs to ${over[0].text.length} characters.`
-            : `${over.length} bullets run over ${limit} characters.`,
-        fix: `Shorten every bullet to under ${limit} characters.`,
-      };
+      case 'max_bullet_chars': {
+        const limit = rule.check.limit;
+        const over = bullets.filter((b) => b.text.length > limit);
+        if (!over.length) return { ...base, verdict: 'pass' };
+        return {
+          ...base,
+          verdict: 'fail',
+          evidence:
+            over.length === 1
+              ? `One bullet runs to ${over[0].text.length} characters.`
+              : `${over.length} bullets run over ${limit} characters.`,
+          fix: `Shorten every bullet to under ${limit} characters.`,
+        };
+      }
+
+      case 'max_pages': {
+        const limit = rule.check.limit;
+        const pages = measured.pages;
+        if (typeof pages !== 'number') return { ...base, verdict: 'guidance' };
+        if (pages <= limit) return { ...base, verdict: 'pass' };
+        return {
+          ...base,
+          verdict: 'fail',
+          evidence: `This version runs to ${pages} ${pages === 1 ? 'page' : 'pages'}.`,
+          fix: `Cut it down to ${limit} ${limit === 1 ? 'page' : 'pages'}.`,
+        };
+      }
+
+      default:
+        return { ...base, verdict: 'guidance' };
     }
-    return { ...base, verdict: 'pass' };
   });
 }

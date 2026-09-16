@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import test from 'node:test';
 import { runChecks } from './ruleCheck';
+import { describeCheck, pageTarget } from './rules';
 import type { CheckableRule } from './rules';
 import type { ResumeStructure } from './types';
 
@@ -210,6 +211,67 @@ test('a bullet exactly on the limit passes', () => {
     limit(110),
   );
   assert.equal(r[0].verdict, 'pass');
+});
+
+// ── Page length, which only the rendered PDF can answer ────────────────────
+
+const pages = (n: number): CheckableRule[] => [
+  { id: 'r3', text: 'Keep it to one page', check: { kind: 'max_pages', limit: n } },
+];
+
+test('a resume within its page limit passes', () => {
+  assert.equal(runChecks(resume(), pages(1), { pages: 1 })[0].verdict, 'pass');
+  assert.equal(runChecks(resume(), pages(2), { pages: 1 })[0].verdict, 'pass');
+});
+
+test('a resume over its page limit fails, and says how long it is', () => {
+  const r = runChecks(resume(), pages(1), { pages: 2 })[0];
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.evidence!, /runs to 2 pages/);
+  assert.match(r.fix!, /1 page/);
+});
+
+test('an unmeasured resume is never failed for its length', () => {
+  // The compile service may be older than this build, or the measurement may
+  // not have fitted in the request's budget. Telling somebody they broke a rule
+  // the app never checked is worse than saying nothing.
+  for (const measured of [{}, { pages: null }, { pages: undefined }]) {
+    assert.equal(runChecks(resume(), pages(1), measured)[0].verdict, 'guidance');
+  }
+});
+
+test('a check kind this build has never heard of is guidance, not a bullet rule', () => {
+  // The hazard this fixes: `runChecks` treated anything that was not
+  // forbidden_text as a bullet-length check and read `check.limit` off it. A
+  // one-page rule would have failed every bullet longer than one character —
+  // and `check` is untyped jsonb, so a kind written by a newer build can reach
+  // an older one at any time.
+  const fromTheFuture = [
+    { id: 'r4', text: 'Something this build cannot check', check: { kind: 'max_words', limit: 1 } as any },
+  ];
+  const r = runChecks(
+    resume({ experience: [{ title: 'E', org: 'O', location: 'L', dates: 'D', bullets: [short(200)] }] }),
+    fromTheFuture,
+  );
+  assert.equal(r[0].verdict, 'guidance');
+});
+
+test('the page target is the tightest rule, or two when nobody said', () => {
+  assert.equal(pageTarget([]), 2);
+  assert.equal(pageTarget(forbid('spearheaded')), 2);
+  assert.equal(pageTarget(pages(1)), 1);
+  assert.equal(pageTarget([...pages(2), ...pages(1)]), 1);
+  // A limit that is not a number, or is zero, is nobody saying anything.
+  assert.equal(pageTarget([{ id: 'r5', text: 'x', check: { kind: 'max_pages', limit: 0 } }]), 2);
+});
+
+test('every kind of check describes itself as what it is', () => {
+  assert.match(describeCheck({ kind: 'max_pages', limit: 1 })!, /fit on 1 page/);
+  assert.match(describeCheck({ kind: 'max_pages', limit: 2 })!, /fit on 2 pages/);
+  assert.match(describeCheck({ kind: 'max_bullet_chars', limit: 110 })!, /110 characters/);
+  assert.match(describeCheck({ kind: 'forbidden_text', terms: ['UOIT'] })!, /must not contain/);
+  assert.equal(describeCheck(null), null);
+  assert.equal(describeCheck({ kind: 'max_words', limit: 5 } as any), null);
 });
 
 test('several over-long bullets are counted rather than listed one by one', () => {

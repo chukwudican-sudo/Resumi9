@@ -79,7 +79,7 @@ const PREAMBLE = String.raw`%-------------------------
     \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
       \textbf{#1} & #2 \\
       \textit{\small#3} & \textit{\small #4} \\
-    \end{tabular*}\vspace{-7pt}
+    \end{tabular*}\vspace{-7pt}\nopagebreak
 }
 
 \newcommand{\resumeSubSubheading}[2]{
@@ -93,7 +93,7 @@ const PREAMBLE = String.raw`%-------------------------
     \item
     \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
       \small#1 & #2 \\
-    \end{tabular*}\vspace{-7pt}
+    \end{tabular*}\vspace{-7pt}\nopagebreak
 }
 
 \newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
@@ -102,7 +102,13 @@ const PREAMBLE = String.raw`%-------------------------
 
 \newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
 \newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
-\newcommand{\resumeItemListStart}{\begin{itemize}}
+% beginpenalty forbids a page break between an entry's heading and its first
+% bullet. Without it a heading can be the last thing on a page and its bullets
+% the first thing on the next — which is how "Founder & Digital Creator / Kudi
+% Kitchen" ended one page with its only bullet starting the next. enumitem is
+% already loaded above, so this costs no new package: the compile service has
+% no network during a compile and could not fetch one.
+\newcommand{\resumeItemListStart}{\begin{itemize}[beginpenalty=10000]}
 \newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
 
 %-------------------------------------------
