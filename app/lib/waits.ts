@@ -67,7 +67,9 @@ export const DOWNLOAD_WHY =
 export const TAILOR_STEPS: Step[] = [
   { label: "Matching it against what you've done", past: "Matched it against what you've done", ms: 7_000 },
   { label: 'Rewriting your experience', past: 'Rewrote your experience', ms: 15_000 },
-  { label: 'Checking nothing was invented', past: 'Checked nothing was invented', ms: 4_000 },
+  // What this step actually does today is check that no entry, skill or date
+  // went missing. It said "nothing was invented", which nothing checked.
+  { label: 'Checking nothing was dropped', past: 'Checked nothing was dropped', ms: 4_000 },
   { label: 'Saving this version', past: 'Saved this version', ms: 2_000 },
 ];
 

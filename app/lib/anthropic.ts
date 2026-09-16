@@ -164,6 +164,32 @@ export class NoToolUseError extends Error {
   }
 }
 
+/** Thrown when the answer ran out of room part way through. */
+export class TruncatedError extends Error {
+  constructor() {
+    super('Model hit max_tokens before finishing its tool call.');
+    this.name = 'TruncatedError';
+  }
+}
+
+/**
+ * The tool call out of a response, or a clear failure.
+ *
+ * Pulled out of `callClaude` so it can be tested, and because it was silently
+ * trusting two things. A response that stopped at `max_tokens` still carries a
+ * `tool_use` block — a half-written one — and the old code handed it on as a
+ * resume. And a `structure` field is not guaranteed to be an object: the model
+ * can return the whole thing as a JSON string, which reads as an empty resume
+ * to everything downstream. One tailor did exactly that, the guard restored
+ * every entry from the profile, and it was saved as a success.
+ */
+export function readToolUse(response: any): Anthropic.ToolUseBlock {
+  if (response?.stop_reason === 'max_tokens') throw new TruncatedError();
+  const block = response?.content?.find((b: any) => b?.type === 'tool_use');
+  if (!block) throw new NoToolUseError();
+  return block as Anthropic.ToolUseBlock;
+}
+
 /**
  * Makes one forced-tool-use call and returns the tool input plus usage.
  *
@@ -235,10 +261,7 @@ export async function callClaude<T>(opts: CallClaudeOptions): Promise<CallClaude
     messages: [{ role: 'user', content: opts.content }],
   } as any, signal ? { signal } : undefined);
 
-  const toolUse = response.content.find((block: any) => block.type === 'tool_use') as
-    | Anthropic.ToolUseBlock
-    | undefined;
-  if (!toolUse) throw new NoToolUseError();
+  const toolUse = readToolUse(response);
 
   const raw = response.usage ?? {};
   const inputTokens = raw.input_tokens ?? 0;

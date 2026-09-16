@@ -79,8 +79,15 @@ export function matchRequirements(
   return { have, missing };
 }
 
-/** The requirement, its aliases, and its forms without a vendor prefix or plural. */
-function waysOfWriting(requirement: string): string[] {
+/**
+ * The requirement, its aliases, and its forms without a vendor prefix or plural.
+ *
+ * Exported because the guard needs the same reading of a technical term: it was
+ * deciding whether a skill had been dropped by exact string, so a model that
+ * wrote "Git/GitHub" for "Git, GitHub" or "Data Pipelines/ETL" for "Data
+ * Pipelines" had its skills "restored" into a duplicate.
+ */
+export function waysOfWriting(requirement: string): string[] {
   const term = requirement.trim().toLowerCase();
   if (!term) return [];
   const ways = new Set([term, ...(ALIASES[term] ?? [])]);
@@ -101,7 +108,7 @@ function waysOfWriting(requirement: string): string[] {
  * happily finds the "C" inside "C++". Here a match may not touch another letter,
  * digit, plus or hash on either side.
  */
-function patternFor(way: string): RegExp {
+export function patternFor(way: string): RegExp {
   const body = way
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/i[sz](e|ed|es|ing|ation|ations|er|ers)(?![a-z])/g, 'i[sz]$1')

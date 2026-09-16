@@ -307,9 +307,18 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                 Nothing has been changed on this version yet.
               </p>
             )}
+            {/*
+              Claims only what is actually checked.
+
+              It used to end "Nothing is invented to fill a gap", which nothing
+              verified — and five reviewed resumes each carried invented claims
+              under that sentence. The checks named here are real: the guard
+              reverts dates, employers and schools to the profile, and puts back
+              entries and skills the tailoring dropped.
+            */}
             <p className="mt-6 border-t border-rule pt-4 text-[12.5px] leading-relaxed text-ink-muted">
-              Every date, employer and number is left exactly as your profile has it. Nothing is
-              invented to fill a gap.
+              Your dates, employers and schools are set back to whatever your profile says, and
+              anything the tailoring dropped is put back.
             </p>
           </div>
 
@@ -594,7 +603,15 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                     className="w-full resize-none rounded border border-rule-field bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
                   />
                   <div className="flex flex-wrap gap-1.5">
-                    {['drop the second bullet', 'lead with the Python work', 'make it fit one page'].map((example) => (
+                    {/*
+                      "make it fit one page" was here and could not work: the
+                      guard restores every entry an edit removes, while the
+                      bullet trims stick, so asking for one page returned a
+                      resume that was still two pages and had lost its best
+                      bullets. Fitting to a page is the app's job, not an
+                      instruction — it comes back when the app measures pages.
+                    */}
+                    {['drop the second bullet', 'lead with the Python work', 'shorten the Aegon bullets'].map((example) => (
                       <button
                         key={example}
                         type="button"

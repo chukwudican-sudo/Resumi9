@@ -1,4 +1,5 @@
 import { parseDates } from './entryFormat';
+import { patternFor, waysOfWriting } from './requirementMatch';
 import type { ResumeStructure } from './types';
 
 /**
@@ -53,6 +54,18 @@ export interface Repair {
 export interface TailorGuardResult {
   structure: ResumeStructure;
   repairs: Repair[];
+  /**
+   * Nothing in what came back could be matched to the profile.
+   *
+   * Not a repair — a failure. The guard's restores are a safety net under a
+   * tailoring that mostly worked; when EVERY entry has to be restored, there
+   * was no tailoring, and `structure` below is simply the profile again. One
+   * real run did this: the model wrote a full resume (3,315 output tokens),
+   * none of it arrived in a shape this file could read, and the untouched
+   * profile was saved as a tailored resume with eleven "put back" warnings and
+   * a credit spent. The caller refunds and says so instead.
+   */
+  unusable: boolean;
 }
 
 // ── comparing ──────────────────────────────────────────────────────────────
@@ -68,6 +81,25 @@ function asList<T>(value: unknown): T[] {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * What the model returned, as an object, whatever it sent.
+ *
+ * A forced tool call does not guarantee the shape inside it: a nested object
+ * can arrive as a JSON string holding the same thing. Everything downstream
+ * reads `raw.experience` and finds nothing, so a whole tailored resume reads as
+ * an empty one — which is exactly how a real tailor came to be saved as the
+ * person's own untouched profile. Parsing here costs nothing and turns a silent
+ * emptiness into either a resume or an honest failure.
+ */
+export function normaliseTailored(tailored: unknown): unknown {
+  if (typeof tailored !== 'string') return tailored;
+  try {
+    return JSON.parse(tailored);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -290,9 +322,20 @@ function keepBullets(source: string[], tailored: unknown, what: string, repairs:
  * structure whose `experience` is a bare string would otherwise throw inside a
  * `.map` on the server — after the credit has been spent.
  */
-export function validateTailored(source: ResumeStructure, tailored: unknown): TailorGuardResult {
+export function validateTailored(
+  source: ResumeStructure,
+  tailored: unknown,
+  /**
+   * What the source is, in the person's words. A tailor compares against the
+   * profile; an instruction edit compares against the version on screen, and
+   * telling somebody their bullets were "restored from your profile" when they
+   * came from the previous version is simply untrue.
+   */
+  options: { sourceLabel?: string } = {},
+): TailorGuardResult {
   const repairs: Repair[] = [];
-  const raw = (tailored ?? {}) as Partial<ResumeStructure>;
+  const from = options.sourceLabel ?? 'your profile';
+  const raw = (normaliseTailored(tailored) ?? {}) as Partial<ResumeStructure>;
 
   // ── experience ──
   const srcJobs = asList<Experience>(source.experience);
@@ -331,8 +374,8 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
   for (const lost of jobs.missing) {
     repairs.push({
       kind: 'entry',
-      message: `The tailoring dropped your ${jobLabel(lost)}${lost.dates ? ` (${lost.dates})` : ''} and it has been put back in your own words. Read it over — it will not sound like the entries around it.`,
-      logLine: `${jobLabel(lost)}: this role was dropped from the tailored version. Restored from your profile, unedited.`,
+      message: `The tailoring dropped your ${jobLabel(lost)}${lost.dates ? ` (${lost.dates})` : ''} and it has been put back as ${from} has it. Read it over — it will not sound like the entries around it.`,
+      logLine: `${jobLabel(lost)}: this role was dropped from the tailored version. Restored from ${from}, unedited.`,
     });
   }
 
@@ -360,8 +403,8 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
   for (const lost of projects.missing) {
     repairs.push({
       kind: 'entry',
-      message: `The tailoring dropped your ${lost.name} project and it has been put back in your own words.`,
-      logLine: `${lost.name}: this project was dropped from the tailored version. Restored from your profile, unedited.`,
+      message: `The tailoring dropped your ${lost.name} project and it has been put back as ${from} has it.`,
+      logLine: `${lost.name}: this project was dropped from the tailored version. Restored from ${from}, unedited.`,
     });
   }
 
@@ -392,7 +435,7 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
     repairs.push({
       kind: 'entry',
       message: `The tailoring dropped ${lost.degree || 'your degree'} at ${lost.school} and it has been put back.`,
-      logLine: `${lost.school}: this qualification was dropped from the tailored version. Restored from your profile.`,
+      logLine: `${lost.school}: this qualification was dropped from the tailored version. Restored from ${from}.`,
     });
   }
 
@@ -406,15 +449,43 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
     .filter((g) => g && typeof g === 'object' && asText(g.items).trim())
     .map((g) => ({ category: asText(g.category) || 'Skills', items: asText(g.items) }));
 
-  const terms = (groups: { items: string }[]) =>
-    groups.flatMap((g) => g.items.split(',').map((t) => t.trim())).filter(Boolean);
-  const present = new Set(terms(outSkills).map(norm));
-  const lostTerms = terms(srcSkills).filter((t) => norm(t) && !present.has(norm(t)));
+  /*
+   * "Still there" is a reading, not a string comparison.
+   *
+   * This used to ask whether the exact normalised term came back. It does not
+   * survive ordinary regrouping: a model that wrote "Git/GitHub" for "Git,
+   * GitHub", or "Data Pipelines/ETL" for "Data Pipelines", was judged to have
+   * dropped the originals — and the repair then appended them to whichever
+   * group happened to be last. That is how Git, GitHub, Vercel and Cloudflare
+   * Workers ended up filed under "AI & Data", and how "Data Pipelines" came to
+   * be listed twice on the same resume.
+   *
+   * `waysOfWriting` and `patternFor` are the same readers the requirement match
+   * uses, so "C++" is found, "Go" is not found inside "Google", and a term
+   * inside a combined item counts as present.
+   */
+  const splitTerms = (items: string) => items.split(',').map((t) => t.trim()).filter(Boolean);
+  const written = outSkills.map((g) => g.items).join(', ');
+  const stillThere = (term: string) =>
+    waysOfWriting(term).some((way) => patternFor(way).test(written));
 
   const skills = outSkills.length ? outSkills.map((g) => ({ ...g })) : srcSkills.map((g) => ({ ...g }));
-  if (lostTerms.length && outSkills.length) {
-    const last = skills[skills.length - 1];
-    last.items = [last.items, ...lostTerms].filter(Boolean).join(', ');
+  const lostTerms: string[] = [];
+
+  if (outSkills.length) {
+    // Group by group, so a term goes home rather than to the end. Regrouping is
+    // the tailor's to decide; losing somebody's PowerPoint is not.
+    for (const group of srcSkills) {
+      const missing = splitTerms(asText(group.items)).filter((t) => norm(t) && !stillThere(t));
+      if (!missing.length) continue;
+      lostTerms.push(...missing);
+      const home = skills.find((g) => norm(g.category) === norm(group.category));
+      if (home) home.items = [home.items, ...missing].filter(Boolean).join(', ');
+      else skills.push({ category: asText(group.category) || 'Skills', items: missing.join(', ') });
+    }
+  }
+
+  if (lostTerms.length) {
     repairs.push({
       kind: 'skill',
       message: `${lostTerms.length} of your skills were missing from the tailored version and have been put back.`,
@@ -423,7 +494,9 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
   }
 
   // ── the rest ──
-  const keepList = (from: unknown, fallback: string[] | undefined, what: string): string[] | undefined => {
+  // `returned`, not `from`: `from` is now the label for where restores come
+  // from, and a parameter of the same name would quietly shadow it here.
+  const keepList = (returned: unknown, fallback: string[] | undefined, what: string): string[] | undefined => {
     const src = fallback ?? [];
     // Nothing on the profile means nothing on the tailored copy.
     //
@@ -460,7 +533,7 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
     repairs.push({
       kind: 'entry',
       message: 'Your summary was missing from the tailored version and has been put back.',
-      logLine: 'Summary: dropped by the tailoring and restored from your profile.',
+      logLine: `Summary: dropped by the tailoring and restored from ${from}.`,
     });
   }
 
@@ -478,6 +551,17 @@ export function validateTailored(source: ResumeStructure, tailored: unknown): Ta
 
   return {
     repairs,
+    /*
+     * Not one entry answered to anything in the source.
+     *
+     * Every restore above fired, so `structure` below is the source copied back
+     * with a pile of "we put this back" notices attached. That is not a tailored
+     * resume, and saving it as one is how somebody paid a credit for their own
+     * profile under a new filename.
+     */
+    unusable:
+      jobPairs.size + projectPairs.size + schoolPairs.size === 0 &&
+      srcJobs.length + srcProjects.length + srcSchools.length > 0,
     structure: {
       // Nothing the tailored copies carry that the source does not.
       name: source.name,

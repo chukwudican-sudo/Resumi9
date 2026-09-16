@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { surfaceRepairs, validateTailored } from './tailorGuard';
+import { normaliseTailored, surfaceRepairs, validateTailored } from './tailorGuard';
 import type { ResumeStructure } from './types';
 
 /**
@@ -342,4 +342,110 @@ test('certifications the person does have are kept, and a dropped one comes back
     'AWS Certified Cloud Practitioner',
     'CFA Level I',
   ]);
+});
+
+// ── a resume that never arrived ────────────────────────────────────────────
+//
+// A forced tool call guarantees a tool call, not the shape inside it. One real
+// tailor wrote 3,315 output tokens and none of it could be read here: every
+// entry was "restored", the untouched profile was saved as a tailored resume,
+// and a credit was spent on it.
+
+test('a structure that arrives as a JSON string is read, not discarded', () => {
+  const tailored = validateTailored(SOURCE, JSON.stringify(clone()));
+  assert.equal(tailored.unusable, false);
+  assert.deepEqual(orgs(tailored.structure), ['Droady', 'Aegon', 'WesternBell']);
+  assert.deepEqual(tailored.repairs, []);
+});
+
+test('nothing readable at all is unusable, not a resume', () => {
+  for (const nothing of ['not json at all', null, undefined, {}, 42, '{"experience":']) {
+    const tailored = validateTailored(SOURCE, nothing);
+    assert.equal(tailored.unusable, true, `should be unusable: ${String(nothing)}`);
+  }
+});
+
+test('an ordinary tailor is never unusable', () => {
+  const out = clone();
+  out.experience[0].bullets = ['Rewritten for the job'];
+  assert.equal(validateTailored(SOURCE, out).unusable, false);
+});
+
+test('one dropped entry is a repair, not a failure', () => {
+  // The distinction the flag exists for: restoring some of a resume is the
+  // safety net working; restoring all of it means there was no resume.
+  const out = clone();
+  out.experience.splice(1, 1);
+  const tailored = validateTailored(SOURCE, out);
+  assert.equal(tailored.unusable, false);
+  assert.equal(tailored.repairs.filter((r) => r.kind === 'entry').length, 1);
+});
+
+test('an empty profile is not a failed tailor', () => {
+  const empty = { ...SOURCE, education: [], experience: [], projects: [] };
+  assert.equal(validateTailored(empty, { ...empty }).unusable, false);
+});
+
+// ── skills: a regroup is not a deletion ────────────────────────────────────
+
+test('terms combined into one item still count as present', () => {
+  // "Git/GitHub" for "Git, GitHub" was read as two dropped skills, and the
+  // repair appended them to whichever group came last — which is how Git and
+  // Vercel ended up filed under "AI & Data" on a real resume.
+  const source = { ...SOURCE, skills: [{ category: 'Tools', items: 'Git, GitHub, Data Pipelines' }] };
+  const tailored = validateTailored(source, {
+    ...source,
+    skills: [{ category: 'Tools', items: 'Git/GitHub, Data Pipelines/ETL' }],
+  });
+  assert.deepEqual(tailored.repairs.filter((r) => r.kind === 'skill'), []);
+  assert.equal(tailored.structure.skills.length, 1);
+});
+
+test('a skill that really is gone comes back to its own group, not the last one', () => {
+  const tailored = validateTailored(SOURCE, {
+    ...clone(),
+    skills: [
+      { category: 'Tools', items: 'Microsoft Excel' },
+      { category: 'Languages', items: 'TypeScript, Java, SQL' },
+    ],
+  });
+  const tools = tailored.structure.skills.find((g) => g.category === 'Tools');
+  const languages = tailored.structure.skills.find((g) => g.category === 'Languages');
+  assert.match(tools!.items, /Ms PowerPoint/);
+  assert.doesNotMatch(languages!.items, /PowerPoint/);
+  assert.equal(tailored.repairs.filter((r) => r.kind === 'skill').length, 1);
+});
+
+test('a short skill is not found inside a longer word', () => {
+  // "Go" must not be satisfied by "Google Cloud", or a dropped language is
+  // never reported.
+  const source = { ...SOURCE, skills: [{ category: 'Languages', items: 'Go, TypeScript' }] };
+  const tailored = validateTailored(source, {
+    ...source,
+    skills: [{ category: 'Languages', items: 'Google Cloud, TypeScript' }],
+  });
+  const skill = tailored.repairs.find((r) => r.kind === 'skill');
+  assert.match(skill!.logLine, /Go/);
+});
+
+// ── saying where a restore came from ───────────────────────────────────────
+
+test('an edit restores from the previous version, and says so', () => {
+  // The source for an instruction edit is the resume on screen, not the
+  // profile. "Restored from your profile, unedited" was untrue on every edit,
+  // and visibly so: the restored entry carried the previous tailoring's words.
+  const tailored = validateTailored(SOURCE, { ...clone(), experience: [] }, {
+    sourceLabel: 'the previous version',
+  });
+  const restored = tailored.repairs.filter((r) => r.kind === 'entry');
+  assert.equal(restored.length, 3);
+  for (const repair of restored) {
+    assert.match(repair.logLine, /the previous version/);
+    assert.doesNotMatch(repair.logLine, /your profile/);
+  }
+});
+
+test('a tailor still restores from your profile by default', () => {
+  const tailored = validateTailored(SOURCE, { ...clone(), projects: [] });
+  assert.match(tailored.repairs.find((r) => r.kind === 'entry')!.logLine, /your profile/);
 });

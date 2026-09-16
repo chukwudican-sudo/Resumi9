@@ -272,14 +272,36 @@ const TAILORED_STRUCTURE_SCHEMA = {
   required: ['education', 'experience', 'projects', 'skills'],
 };
 
-export const TAILOR_TOOL: Anthropic.Tool = {
+/**
+ * The tailoring tool, shaped to the resume it is tailoring.
+ *
+ * `summary` exists only when the person's profile has one. The guard drops a
+ * summary the master resume does not have — "the person decides what sections
+ * they have" — but the field was always on offer, so the model wrote one
+ * anyway and then logged "Added a summary framing…" on a resume that has no
+ * summary on it. Four tailors out of four said that. A field that cannot reach
+ * the page should not be askable.
+ *
+ * `structuralChanges` is gone with it. It existed to report a bullet moved from
+ * one entry into another, which the rules now forbid outright: a fact belongs
+ * to the entry it happened in. Asking for the report invited the move — one
+ * tailor folded a project into a job of the same name, the guard restored the
+ * project, and the same facts appeared twice on one page.
+ */
+export function tailorToolFor({ hasSummary }: { hasSummary: boolean }): Anthropic.Tool {
+  const { summary, ...withoutSummary } = TAILORED_STRUCTURE_SCHEMA.properties;
+  const structureSchema = hasSummary
+    ? TAILORED_STRUCTURE_SCHEMA
+    : { ...TAILORED_STRUCTURE_SCHEMA, properties: withoutSummary };
+
+  return {
   name: 'submit_tailored_resume',
-  description: 'Submit the fully tailored resume as an edited ResumeStructure along with a change log, match score, structural change flags, and any warnings.',
+  description: 'Submit the tailored resume as an edited ResumeStructure, with a change log, a match score, the requirements it does not meet, and any warnings.',
   input_schema: {
     type: 'object',
     properties: {
       structure: {
-        ...TAILORED_STRUCTURE_SCHEMA,
+        ...structureSchema,
         description: 'The tailored resume content as a ResumeStructure — the same shape as the input structure, with fields/bullets edited for the job. Name, contact, and dates must be identical to the input.',
       },
       /**
@@ -297,7 +319,7 @@ export const TAILOR_TOOL: Anthropic.Tool = {
       log: {
         type: 'array',
         items: { type: 'string' },
-        description: 'The substantive changes you made, at most 6 lines, one short sentence each, in Canadian English. No leading bullet characters needed. Summarise rather than enumerate: "Rewrote the Shopify bullets around credit risk modelling" covers five edited bullets in one line. Do not write a line per reworded bullet. Structural changes still belong in structuralChanges and must appear there — do not put one here instead, and do not repeat one here that you have already named there.',
+        description: 'The substantive changes you made, at most 6 lines, one short sentence each, in the spelling named in ABOUT THIS REQUEST. No leading bullet characters needed. Summarise rather than enumerate: "Rewrote the Shopify bullets around credit risk modelling" covers five edited bullets in one line. Do not write a line per reworded bullet, and do not describe a change you did not make.',
       },
       matchScore: {
         type: 'integer',
@@ -306,25 +328,12 @@ export const TAILOR_TOOL: Anthropic.Tool = {
       missingRequirements: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Specific named skills/requirements from the job posting that are not present in the About Me PDF or Base Resume (e.g. "Docker", "CI/CD experience"). Empty array if the resume already covers everything material.',
-      },
-      structuralChanges: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            description: { type: 'string', description: 'One sentence describing what was moved or changed structurally.' },
-            reason: { type: 'string', description: 'Why this structural change was necessary to improve the match.' },
-          },
-          required: ['description', 'reason'],
-          additionalProperties: false,
-        },
-        description: 'Structural changes that require user approval before the resume is considered final. A structural change is: (1) moving a bullet from one entry into a different entry — for example, pulling a bullet from one job/project and placing it in another, OR (2) substantively renaming or repurposing a section\'s meaning. Regular bullet rewrites, reordering skills within a category, or tightening of wording are NOT structural changes — do not include them here. Empty array if no structural changes were made.',
+        description: 'Named skills, tools or qualifications the posting asks for that this resume does not show (e.g. "Docker", "C#"). This is where an unmet requirement belongs — never write one into a bullet instead. Empty array if the resume already covers everything material.',
       },
       warnings: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Any warnings: image-based/unreadable PDFs, blurry screenshots, rule conflicts, resume exceeding 2 pages, etc. Empty array if none.',
+        description: 'Anything the person should check before sending: a personal rule you could not satisfy, a conflict between a rule and the posting, something in the structure that looks wrong. Empty array if none. Say nothing about length — the app measures the real page count itself.',
       },
     },
     required: [
@@ -332,12 +341,13 @@ export const TAILOR_TOOL: Anthropic.Tool = {
       'log',
       'matchScore',
       'missingRequirements',
-      'structuralChanges',
       'warnings',
     ],
     additionalProperties: false,
   },
-};
+  };
+}
+
 
 /**
  * Reading one rule: what can be verified in it, and what it argues with.
@@ -453,24 +463,25 @@ export const INSTRUCT_TOOL: Anthropic.Tool = {
     type: 'object',
     properties: {
       structure: {
-        ...RESUME_STRUCTURE_SCHEMA,
+        // The same narrow shape the tailor returns. This asked for the whole
+        // resume — name, contact, degrees, links — and the guard overwrote all
+        // of it from the source afterwards, so every edit paid to write fields
+        // that were thrown away before anybody saw them.
+        ...TAILORED_STRUCTURE_SCHEMA,
         description: 'The full updated resume content as a ResumeStructure — same shape as the input structure, with only the field(s) relevant to the instruction changed; everything else returned verbatim.',
       },
       log: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Plain-English description of what changed and why, in Canadian English.',
-      },
-      estimatedPages: {
-        type: 'integer',
-        description: 'Estimated resume length in pages (1, 2, or 3+) after this edit.',
+        description: 'Plain-English description of what changed and why, in the spelling named in ABOUT THIS REQUEST.',
       },
       warnings: {
         type: 'array',
         items: { type: 'string' },
+        description: 'Anything the person should check before sending. Empty array if none. Say nothing about length — the app measures the real page count itself.',
       },
     },
-    required: ['structure', 'log', 'estimatedPages', 'warnings'],
+    required: ['structure', 'log', 'warnings'],
     additionalProperties: false,
   },
 };

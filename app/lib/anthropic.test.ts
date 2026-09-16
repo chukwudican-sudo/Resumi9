@@ -1,6 +1,14 @@
 import assert from 'node:assert';
 import test from 'node:test';
-import { CALL_CONFIG, DEADLINE_GOVERNED, REQUEST_BUDGET_MS, type UsageKind } from './anthropic';
+import {
+  CALL_CONFIG,
+  DEADLINE_GOVERNED,
+  NoToolUseError,
+  REQUEST_BUDGET_MS,
+  TruncatedError,
+  readToolUse,
+  type UsageKind,
+} from './anthropic';
 import { estimateCostUsd } from './pricing';
 
 /**
@@ -8,6 +16,31 @@ import { estimateCostUsd } from './pricing';
  * cost a day to find. Neither is expressible in the type system, so they are
  * held here instead of in a comment nobody reads at the moment it matters.
  */
+
+test('an answer that ran out of room is a failure, not a resume', () => {
+  // A response that stops at max_tokens still carries a tool_use block — a half
+  // written one. Handed on, it becomes a resume missing whatever came after the
+  // cut, and the guard then "restores" all of it with no idea why.
+  assert.throws(
+    () =>
+      readToolUse({
+        stop_reason: 'max_tokens',
+        content: [{ type: 'tool_use', input: { structure: {} } }],
+      }),
+    TruncatedError,
+  );
+});
+
+test('a forced tool call that produced no tool call says so', () => {
+  assert.throws(() => readToolUse({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'hi' }] }), NoToolUseError);
+  assert.throws(() => readToolUse({}), NoToolUseError);
+  assert.throws(() => readToolUse(null), NoToolUseError);
+});
+
+test('an ordinary answer hands back the tool call', () => {
+  const block = { type: 'tool_use', name: 'submit_tailored_resume', input: { structure: { experience: [] } } };
+  assert.equal(readToolUse({ stop_reason: 'tool_use', content: [{ type: 'text', text: '' }, block] }), block);
+});
 
 test('no deadline-governed call may time out before the request budget does', () => {
   // The bug this replaces: the tailor route budgeted 52s while the tailor's own

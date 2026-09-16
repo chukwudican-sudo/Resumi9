@@ -20,10 +20,60 @@ test('an American applicant is told to use American spelling', () => {
   assert.doesNotMatch(context, /organise/);
 });
 
-test('a Canadian applicant still gets Canadian spelling', () => {
+test('a Canadian applicant gets Canadian spelling, which is not British spelling', () => {
+  // The examples used to be "programme" and "organise", which are British. So
+  // rewritten bullets came back "categorised" and "optimising" while the
+  // untouched ones kept the profile's American spelling, in one document.
   const context = buildUserContext({ displayName: 'Alex Ndubuisi', locale: 'en-CA' });
   assert.match(context, /Canadian English/);
-  assert.match(context, /colour, programme, licence, organise/);
+  assert.match(context, /colour, behaviour, centre/);
+  assert.match(context, /organize, optimize, analyze/);
+  assert.doesNotMatch(context, /programme|organise/);
+});
+
+test('the spelling instruction covers the change log too', () => {
+  assert.match(buildUserContext({ locale: 'en-US' }), /change log/i);
+});
+
+test('the invariant does not push the model to invent', () => {
+  // Every one of these produced invented claims in the five reviewed resumes:
+  // posting phrases pasted onto real work, practices nobody did, inflated
+  // ownership. The pressure came from the prompt, not the model.
+  for (const pressure of [
+    /aggressively/i,
+    /MINIMUM BAR/,
+    /fully rewrite the bullet/i,
+    /almost identically/i,
+    /mirror the language/i,
+    /estimatedPages/,
+    /Maximum 2 pages/i,
+  ]) {
+    assert.doesNotMatch(TAILOR_INVARIANT, pressure, `still says ${pressure}`);
+  }
+
+  // And it says, in so many words, what inventing looks like inside a bullet.
+  assert.match(TAILOR_INVARIANT, /stakeholders/i);
+  assert.match(TAILOR_INVARIANT, /"Contributed to X" may not become/);
+  assert.match(TAILOR_INVARIANT, /An unchanged bullet is a correct answer/);
+});
+
+test('it still asks for real tailoring, not just reordering', () => {
+  // Measured: with the invention pressure removed and nothing put in its place,
+  // a real run came back with 26 of 27 bullets untouched and a change log that
+  // said "only reordering and word choices". Silence is the other failure.
+  assert.match(TAILOR_INVARIANT, /almost entirely untouched has not been tailored/);
+  // Both caught in a real run once the pressure came back: a team became
+  // "working closely with the other developers", and a tool from elsewhere on
+  // the resume was bolted onto a bullet it had nothing to do with.
+  assert.match(TAILOR_INVARIANT, /a team is who was there, not what you did with them/);
+  assert.match(TAILOR_INVARIANT, /Each bullet is evidence for what that bullet says/);
+  assert.match(TAILOR_INVARIANT, /reordering alone is not tailoring/);
+  assert.match(TAILOR_INVARIANT, /it is the wrong default/);
+});
+
+test('length is the app\'s decision, not the model\'s', () => {
+  assert.match(TAILOR_INVARIANT, /Do not decide length/);
+  assert.match(TAILOR_INVARIANT, /least relevant/);
 });
 
 test('an unknown or missing locale falls back rather than dropping the instruction', () => {

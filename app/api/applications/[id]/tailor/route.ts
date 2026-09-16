@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { NoToolUseError, REQUEST_BUDGET_MS, callClaude } from '../../../../lib/anthropic';
+import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
 import { TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import type { ResumeStructure } from '../../../../lib/types';
 import { surfaceRepairs, validateTailored } from '../../../../lib/tailorGuard';
 import { requireUserId } from '../../../../server/auth';
 import { MONTHLY_CREDITS } from '../../../../lib/credits';
 import { hasEnoughToTailor } from '../../../../lib/readiness';
+import { matchRequirements } from '../../../../lib/requirementMatch';
 import {
   getActiveRules,
   getUser,
@@ -17,7 +18,7 @@ import {
   saveResume,
   spendCredit,
 } from '../../../../server/db/repository';
-import { capacityResponse, TAILOR_TOOL, errorResponse, SERVICE_UNAVAILABLE } from '../../../claude/shared';
+import { capacityResponse, tailorToolFor, errorResponse, SERVICE_UNAVAILABLE } from '../../../claude/shared';
 
 export const maxDuration = 60;
 
@@ -141,7 +142,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
         targetField: user?.targetField,
       }),
       content,
-      tool: TAILOR_TOOL,
+      // The summary field only exists when the profile has one. The guard drops
+      // a summary a master resume does not have, so offering the field meant the
+      // model wrote one, the guard binned it, and the change log still announced
+      // "Added a summary…" on a resume with no summary on it.
+      tool: tailorToolFor({ hasSummary: Boolean(structure.summary?.trim()) }),
       deadline,
     });
 
@@ -153,6 +158,27 @@ export async function POST(_request: Request, { params }: { params: { id: string
     const guarded = validateTailored(structure, toolInput.structure);
     const surfaced = surfaceRepairs(guarded.repairs);
 
+    /*
+     * A tailor that restored everything is a failed tailor, not a finished one.
+     *
+     * This happened for real: the model wrote 3,315 output tokens, none of it
+     * arrived in a shape the guard could read, and the profile was saved back
+     * as a "tailored" resume — 28 of 28 bullets identical — with eleven
+     * warnings and a credit gone. The person got their own resume with a new
+     * filename and no way to know.
+     */
+    if (guarded.unusable) {
+      await refundCredit(userId);
+      console.error('[Resumi9] Tailoring returned nothing that matched the profile; refunded.');
+      return errorResponse(
+        {
+          type: 'generic',
+          message: 'That came back unusable, so nothing was saved. Your credit was not used — try again.',
+        },
+        502,
+      );
+    }
+
     const restored = guarded.repairs.filter((r) => r.kind === 'entry').length;
     if (restored) {
       // Countable without a database query. An entry going missing is the
@@ -161,21 +187,31 @@ export async function POST(_request: Request, { params }: { params: { id: string
       console.error(`[Resumi9] Tailoring dropped ${restored} entr${restored === 1 ? 'y' : 'ies'}; restored from the profile.`);
     }
 
-    // The model reports its own structural decisions and this was thrown away.
-    // Shown alongside the guard and never instead of it: a bullet moved from
-    // one job to another is a claim moved between employers, and until now
-    // nobody ever saw that happen.
-    const structural = (toolInput.structuralChanges ?? [])
-      .filter((c) => c && typeof c.description === 'string')
-      .map((c) => `Structural: ${c.description}${c.reason ? ` — ${c.reason}` : ''}`);
-
     const resumeId = await saveResume(userId, params.id, {
       structure: guarded.structure,
       matchScore: toolInput.matchScore ?? null,
-      missingRequirements: toolInput.missingRequirements ?? [],
+      /*
+       * The model's list, plus any requirement a literal check cannot find on
+       * the finished resume.
+       *
+       * Asked to report its own gaps, the model reports the ones it did not
+       * paper over. One tailor wrote "analytics-driven prediction logic" into a
+       * bullet and machine learning — named by that posting, absent from this
+       * profile — simply stopped appearing here. A gap the person never sees is
+       * a question they get asked in the interview instead.
+       */
+      missingRequirements: [
+        ...(toolInput.missingRequirements ?? []),
+        ...matchRequirements(guarded.structure, (posting?.requirements as string[]) ?? []).missing.filter(
+          (gap) =>
+            !(toolInput.missingRequirements ?? []).some((named) =>
+              named.toLowerCase().includes(gap.toLowerCase()),
+            ),
+        ),
+      ],
       // Guard lines lead. The point of a restore notice is lost at item
       // fourteen of sixteen.
-      log: [...surfaced.log, ...structural, ...(toolInput.log ?? [])],
+      log: [...surfaced.log, ...(toolInput.log ?? [])],
       warnings: [...surfaced.warnings, ...(toolInput.warnings ?? [])],
       // The column exists and nothing has ever read it back, so the model is
       // no longer asked to produce a number for it.
@@ -235,6 +271,18 @@ export async function POST(_request: Request, { params }: { params: { id: string
     }
     if (error instanceof Anthropic.APIConnectionError) {
       return errorResponse({ type: 'network', message: 'Your internet connection dropped.' }, 503);
+    }
+    // Cut off part way through, so whatever arrived is half a resume. It used
+    // to be handed to the guard, which restored the missing half from the
+    // profile and saved the result as a finished tailor.
+    if (error instanceof TruncatedError) {
+      return errorResponse(
+        {
+          type: 'generic',
+          message: 'That came back cut off, so nothing was saved. Your credit was not used — try again.',
+        },
+        502,
+      );
     }
     if (error instanceof NoToolUseError) {
       return errorResponse({ type: 'generic', message: SERVICE_UNAVAILABLE }, 502);

@@ -26,9 +26,19 @@ export const LOCALE_OPTIONS: LocaleOption[] = [
   {
     value: 'en-CA',
     label: 'Canadian English',
-    sample: 'colour, licence, organise',
+    sample: 'colour, centre, organize',
+    /*
+     * Canadian English is not British English, and this row said it was.
+     *
+     * It takes the British -our and -re (colour, behaviour, centre) but keeps
+     * the -ize and -yze endings (organize, optimize, analyze) and writes
+     * "program". The old examples — "programme", "organise" — are British, so
+     * every tailored resume came back with British spellings mixed into the
+     * American ones already in the person's profile. Found by a reviewer
+     * reading one resume that said both "categorised" and "analyzed".
+     */
     instruction:
-      'Canadian English spelling (colour, programme, licence, organise) — never American spelling',
+      'Canadian English spelling: -our and -re endings (colour, behaviour, centre), but -ize and -yze endings (organize, optimize, analyze) and "program" — never the British -ise or the American -or',
   },
   {
     value: 'en-US',

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { NoToolUseError, callClaude } from '../../../../lib/anthropic';
+import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
 import { TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { surfaceRepairs, validateTailored } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
@@ -103,7 +103,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       text: [
         'Current tailored resume — the Resume Structure to edit:',
         '```json',
-        JSON.stringify(structure, null, 2),
+        // Minified. The two-space indent was pure whitespace re-sent on every
+        // edit, and the model does not read it any better for being pretty.
+        JSON.stringify(structure),
         '```',
         `Job posting — Company: ${posting?.company ?? '(not provided)'}, Role: ${posting?.role ?? '(not provided)'}\n${posting?.description ?? '(no description)'}`,
         `The person has asked for one change: "${instruction}"`,
@@ -128,13 +130,34 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }),
       content,
       tool: INSTRUCT_TOOL,
+      // An edit is a model call like any other, and it had no budget at all:
+      // only the SDK's per-attempt timeout stood between a slow one and the
+      // platform killing the function.
+      deadline: Date.now() + REQUEST_BUDGET_MS,
     });
 
     // The same guard the tailor runs. "Make it shorter" is exactly the
     // instruction that could drop an entry, and this returns a whole structure
     // the same way tailoring does.
-    const guarded = validateTailored(structure, toolInput.structure);
+    // The source here is the version on screen, not the profile — so the guard
+    // is told to say so. "Restored from your profile, unedited" was untrue on
+    // every edit, and visibly so: the restored entries came back carrying the
+    // previous tailoring's wording.
+    const guarded = validateTailored(structure, toolInput.structure, {
+      sourceLabel: 'the previous version',
+    });
     const surfaced = surfaceRepairs(guarded.repairs);
+
+    // Nothing in the edit matched the version it was editing, so there is no
+    // edit — only the previous version copied back under a new number. Saying
+    // so beats saving a version whose whole change log is "we put this back".
+    if (guarded.unusable) {
+      console.error('[Resumi9] Instruct returned nothing that matched the current version.');
+      return errorResponse(
+        { type: 'generic', message: 'That edit came back unusable, so nothing was changed. Try again.' },
+        502,
+      );
+    }
 
     const resumeId = await saveResume(userId, params.id, {
       structure: guarded.structure,
@@ -145,7 +168,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       missingRequirements: (current.missingRequirements as string[]) ?? [],
       log: [`You asked: "${instruction}"`, ...surfaced.log, ...(toolInput.log ?? [])],
       warnings: [...surfaced.warnings, ...(toolInput.warnings ?? [])],
-      estimatedPages: toolInput.estimatedPages ?? current.estimatedPages,
+      // Carried, not asked for. The model's guess was wrong every time it was
+      // checked — "slightly over 1 page" for a resume that filled two — so the
+      // tool no longer requests it. A real measurement replaces this later.
+      estimatedPages: current.estimatedPages,
       mode: 'instructed',
     });
 
@@ -172,6 +198,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     if (error instanceof Anthropic.APIConnectionError) {
       return errorResponse({ type: 'network', message: 'Your internet connection dropped.' }, 503);
+    }
+    // Ran out of room part way through, so whatever came back is half an edit.
+    if (error instanceof TruncatedError) {
+      return errorResponse(
+        { type: 'generic', message: 'That edit came back cut off, so nothing was changed. Try again.' },
+        502,
+      );
     }
     if (error instanceof NoToolUseError) return errorResponse({ type: 'generic', message: SERVICE_UNAVAILABLE }, 502);
     console.error('[Resumi9] Instruct failed.', error);
