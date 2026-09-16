@@ -335,7 +335,16 @@ export interface SectionStatus {
  * happening. There was nothing else on the screen saying which section to go
  * to, so the answer was "ask whoever built it".
  */
-export function sectionStatus(structure: ResumeStructure, contactSaved = true): SectionStatus[] {
+export function sectionStatus(
+  structure: ResumeStructure,
+  contactSaved = true,
+  /**
+   * Which sections have been confirmed. Undefined means "not tracked" and every
+   * filled section counts as done — which is what every caller outside the
+   * setup rail wants, and what the tests here assert.
+   */
+  confirmed?: string[],
+): SectionStatus[] {
   const reachable = Boolean(structure.name && structure.contact?.email);
   const rail: SectionStatus[] = [
     {
@@ -362,7 +371,7 @@ export function sectionStatus(structure: ResumeStructure, contactSaved = true): 
       key: section.key,
       label: section.label,
       shape: section.shape,
-      done: filled,
+      done: filled && (confirmed ? confirmed.includes(section.key) : true),
       detail: detailFor(section.key, content),
     });
   }

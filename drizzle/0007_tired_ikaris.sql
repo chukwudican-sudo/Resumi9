@@ -1,0 +1,1 @@
+ALTER TABLE "profiles" ADD COLUMN "confirmed_sections" jsonb DEFAULT '[]'::jsonb NOT NULL;

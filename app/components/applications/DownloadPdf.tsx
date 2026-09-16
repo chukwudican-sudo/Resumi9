@@ -52,7 +52,6 @@ export default function DownloadPdf({
   const [state, setState] = useState<'idle' | 'working' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [blocking, setBlocking] = useState<{ message: string }[]>([]);
-  const [polishNote, setPolishNote] = useState<string | null>(null);
   const { dismiss } = useUndo();
 
   // The "Not ready to send" list had the same problem as the polish panel: a
@@ -63,7 +62,6 @@ export default function DownloadPdf({
     setState('working');
     setMessage(null);
     setBlocking([]);
-    setPolishNote(null);
     try {
       if (polishFirst) {
         // One list with the PDF on the end of it. Press Download, get twenty
@@ -84,14 +82,11 @@ export default function DownloadPdf({
       // button that just handed over a PDF made from it would be a question
       // about the wrong thing at the wrong moment.
         dismiss();
-        const outcome = await polishMasterResume();
-        const parts = [
-          outcome.corrections.length
-            ? `${outcome.corrections.length} correction${outcome.corrections.length === 1 ? '' : 's'}`
-            : null,
-          'skills grouped and sections ordered',
-        ].filter(Boolean);
-        setPolishNote(`Polished first \u2014 ${parts.join(', ')}.`);
+        // Not reported afterwards. The note this used to leave in the header
+        // never cleared, so it sat between Download and Done for the rest of
+        // the session holding a gap open — and the steps above have already
+        // said what the pass does, while it is doing it.
+        await polishMasterResume();
         router.refresh();
       }
 
@@ -156,12 +151,6 @@ export default function DownloadPdf({
         </svg>
         {state === 'working' ? 'Building…' : 'Download PDF'}
       </button>
-
-      {polishNote && !blocking.length ? (
-        <span className="max-w-[220px] text-right text-[12px] leading-snug text-ink-muted">
-          {polishNote}
-        </span>
-      ) : null}
 
       {blocking.length ? (
         <div className="absolute right-0 top-full z-50 mt-2 w-[360px] rounded-lg border border-flag/40 bg-ground-surface p-4 text-left shadow-xl shadow-ink/10">

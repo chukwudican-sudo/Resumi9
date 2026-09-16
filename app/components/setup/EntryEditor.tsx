@@ -387,7 +387,7 @@ export default function EntryEditor({
                     setDraft({ ...draft, bullets: next });
                   }}
                   placeholder={copy.linesPlaceholder}
-                  className="w-full resize-none rounded border border-rule-field bg-ground-surface px-3.5 py-2.5 text-[14.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent"
+                  className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-rule-field bg-ground-surface px-3.5 py-2.5 text-[14.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent"
                 />
                 {draft.bullets.length > 1 ? (
                   <button

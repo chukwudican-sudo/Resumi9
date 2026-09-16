@@ -173,7 +173,7 @@ export default function RulesShell({ initialRules }: { initialRules: Rule[] }) {
             }
           }}
           placeholder="Never use the word &quot;spearheaded&quot;."
-          className="w-full resize-none rounded border border-rule-field bg-ground-surface px-4 py-3.5 text-[15px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent"
+          className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-rule-field bg-ground-surface px-4 py-3.5 text-[15px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent"
         />
         <div className="mt-2.5 flex items-center justify-between">
           <span className="text-[12.5px] text-ink-faint">
@@ -233,7 +233,7 @@ export default function RulesShell({ initialRules }: { initialRules: Rule[] }) {
                       value={editingText}
                       maxLength={RULE_MAX_LENGTH}
                       onChange={(e) => setEditingText(e.target.value)}
-                      className="w-full resize-none rounded border border-accent bg-ground px-3.5 py-2.5 text-[14.5px] leading-relaxed outline-none"
+                      className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-accent bg-ground px-3.5 py-2.5 text-[14.5px] leading-relaxed outline-none"
                     />
                     <div className="mt-2.5 flex justify-end gap-3">
                       <button

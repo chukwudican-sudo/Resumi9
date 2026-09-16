@@ -20,6 +20,7 @@ import { useConfirm } from '../undo/ConfirmProvider';
  */
 export default function SetupUpload({
   disabled,
+  imported,
   entryCount,
   sectionCount,
   hasSkills,
@@ -28,6 +29,15 @@ export default function SetupUpload({
 }: {
   /** Held shut while a form is dirty, for the same reason "+ Add a section" is. */
   disabled: boolean;
+  /**
+   * Whether this profile already came from a file.
+   *
+   * The card exists to tell somebody typing their resume in that there is a
+   * faster way. Shown to somebody who has already uploaded, it is the app
+   * suggesting they start again — so it shrinks to a link, which is still the
+   * only route back to a second import once onboarding has been passed.
+   */
+  imported: boolean;
   entryCount: number;
   sectionCount: number;
   hasSkills: boolean;
@@ -65,6 +75,41 @@ export default function SetupUpload({
         undefined,
   });
 
+  function start() {
+    // Started before the picker opens, so the pane commits the moment the
+    // gesture does — not thirty seconds later when bytes start moving.
+    wait.start({
+      title: 'Reading your resume.',
+      steps: IMPORT_STEPS,
+      estimate: 'Usually about thirty seconds.',
+      // The window: this replaces every entry, section and fact. The rail
+      // and the editor behind it are already gone.
+      scope: 'window',
+    });
+    upload.pick();
+  }
+
+  const error = upload.error ? (
+    <p className="pt-1.5 text-[12px] leading-snug text-flag">{upload.error}</p>
+  ) : null;
+
+  if (imported) {
+    return (
+      <div className="mt-4 hidden lg:block">
+        <button
+          type="button"
+          onClick={start}
+          disabled={disabled || upload.busy}
+          className="text-[12.5px] text-accent transition hover:text-accent-hover disabled:opacity-40"
+        >
+          {upload.busy ? 'Reading your resume…' : 'Upload a different resume'}
+        </button>
+        {upload.input}
+        {error}
+      </div>
+    );
+  }
+
   return (
     // A card, not another row.
     //
@@ -76,19 +121,7 @@ export default function SetupUpload({
     <div className="mt-4 hidden lg:block">
       <button
         type="button"
-        onClick={() => {
-          // Started before the picker opens, so the pane commits the moment the
-          // gesture does — not thirty seconds later when bytes start moving.
-          wait.start({
-            title: 'Reading your resume.',
-            steps: IMPORT_STEPS,
-            estimate: 'Usually about thirty seconds.',
-            // The window: this replaces every entry, section and fact. The rail
-            // and the editor behind it are already gone.
-            scope: 'window',
-          });
-          upload.pick();
-        }}
+        onClick={start}
         disabled={disabled || upload.busy}
         className="flex w-full flex-col items-start gap-1.5 rounded-md border border-accent-line bg-accent-tint p-3.5 text-left transition hover:bg-accent-wash disabled:opacity-40 disabled:hover:bg-accent-tint"
       >
@@ -119,10 +152,7 @@ export default function SetupUpload({
       </button>
 
       {upload.input}
-
-      {upload.error ? (
-        <p className="pt-1.5 text-[12px] leading-snug text-flag">{upload.error}</p>
-      ) : null}
+      {error}
     </div>
   );
 }

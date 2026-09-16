@@ -76,6 +76,21 @@ export const profiles = pgTable('profiles', {
   composedAt: timestamp('composed_at', { withTimezone: true }),
   stale: boolean('stale').notNull().default(true),
   /**
+   * Sections this person has been through since their last import.
+   *
+   * A tick in the rail used to mean "this section has something in it", which
+   * an import satisfies for every section at once — so an uploaded resume
+   * arrived fully ticked before anybody had read a word of it, claiming a check
+   * nobody had made.
+   *
+   * It cannot be derived. Whether somebody has read their own Experience
+   * section leaves no trace in the data: a bullet they approved is byte for
+   * byte the bullet they never opened. So it is written down when they press
+   * Save or Continue, and emptied by the next import, which is the only event
+   * that makes every section unread again.
+   */
+  confirmedSections: jsonb('confirmed_sections').notNull().default([]),
+  /**
    * The profile as it stood immediately before the last editorial pass.
    *
    * Polish is the one thing here that rewrites words somebody wrote, across

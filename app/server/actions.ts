@@ -39,6 +39,7 @@ import { buildResume, entryFromRow, type EntryWithBullets } from '../lib/buildRe
 import type { ResumeStructure } from '../lib/types';
 import { profileStrength } from '../lib/profileStrength';
 import { runPolish } from './polishProfile';
+import { confirmSection as confirmSectionRow } from './db/repository';
 import { getProfile, getUser } from './db/repository';
 import { RULE_MAX_LENGTH, type RuleCheck } from '../lib/rules';
 import { readRule } from '../lib/ruleIntake';
@@ -431,6 +432,13 @@ export async function restoreSection(
  * the next load — silently, since nothing errors when a value simply never
  * arrives. For a software applicant that is the one link most worth having.
  */
+/** Marks a section as one the person has been through. See profiles.confirmedSections. */
+export async function confirmSectionReviewed(key: string) {
+  const userId = await requireUserId();
+  await confirmSectionRow(userId, key);
+  revalidatePath('/setup');
+}
+
 export async function saveContactAndRefresh(details: {
   name: string;
   email: string;

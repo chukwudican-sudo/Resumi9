@@ -113,7 +113,7 @@ export default function NewApplicationForm({ detailCount }: { detailCount: numbe
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Paste the job posting here…"
-            className="min-h-[220px] w-full resize-none px-5 py-5 text-[14.5px] leading-relaxed text-ink outline-none placeholder:text-ink-ghost disabled:opacity-60"
+            className="[field-sizing:content] max-h-[60vh] min-h-[220px] w-full resize-none px-5 py-5 text-[14.5px] leading-relaxed text-ink outline-none placeholder:text-ink-ghost disabled:opacity-60"
           />
           <div className="flex items-center gap-2.5 border-t border-rule-soft bg-ground-panel/50 px-4 py-3">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8A8680" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">

@@ -90,7 +90,7 @@ export default function ProseSection({
         }}
         rows={7}
         placeholder="Software engineer building full-stack products, strongest in TypeScript and Python&hellip;"
-        className="mt-7 w-full resize-y rounded border border-rule-field bg-ground-surface px-3.5 py-3 text-[15px] leading-relaxed text-ink outline-none transition focus:border-accent"
+        className="[field-sizing:content] max-h-[20lh] mt-7 w-full resize-y rounded border border-rule-field bg-ground-surface px-3.5 py-3 text-[15px] leading-relaxed text-ink outline-none transition focus:border-accent"
       />
 
       <div className="mt-3 flex items-center justify-between">

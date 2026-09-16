@@ -600,7 +600,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                     onChange={(e) => setInstruction(e.target.value)}
                     disabled={editing || busy}
                     placeholder="Make the FraudWatch bullets shorter…"
-                    className="w-full resize-none rounded border border-rule-field bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
+                    className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-rule-field bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
                   />
                   <div className="flex flex-wrap gap-1.5">
                     {/*

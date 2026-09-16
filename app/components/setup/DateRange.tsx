@@ -25,8 +25,24 @@ export default function DateRange({
   // A certificate you are studying for is not a job you still hold, and its
   // finish date is a date to enter rather than one to grey out.
   const towards = worksTowards(kind);
+  /*
+   * Said the way the section's own content would say it.
+   *
+   * Everything that was not education or a certificate fell through to "I still
+   * work here", so a project in progress, an award, and somebody's own
+   * Volunteering section all claimed employment. Experience is the only one
+   * that is a job.
+   */
   const currentLabel =
-    kind === 'education' ? 'Still studying' : towards ? 'Still working towards it' : 'I still work here';
+    kind === 'education'
+      ? 'Still studying'
+      : towards
+        ? 'Still working towards it'
+        : kind === 'experience'
+          ? 'I still work here'
+          : kind === 'projects'
+            ? 'Still working on it'
+            : 'Still ongoing';
   const preview = formatDates(value, kind);
 
   return (

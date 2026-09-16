@@ -157,6 +157,22 @@ export async function getProfile(userId: string) {
   return row ?? null;
 }
 
+/**
+ * Records that somebody has been through a section.
+ *
+ * Append-only within an import: confirming twice is the common case (Save, then
+ * Continue) and must not produce two entries or a lost one.
+ */
+export async function confirmSection(userId: string, key: string) {
+  const profile = await getProfile(userId);
+  const current = ((profile?.confirmedSections as string[] | null) ?? []);
+  if (current.includes(key)) return;
+  await db
+    .update(profiles)
+    .set({ confirmedSections: [...current, key], updatedAt: new Date() })
+    .where(eq(profiles.userId, userId));
+}
+
 export async function getProfileEntries(userId: string) {
   return db
     .select()
@@ -418,6 +434,8 @@ export async function replaceProfileFromResume(
         bulletSources: [],
         strength,
         composedAt: new Date(),
+        // Nothing here has been read yet — see profiles.confirmedSections.
+        confirmedSections: [],
         // Stale on purpose. The rows above are now the source of truth and the
         // resume renders from them, so claiming a finished editorial pass over
         // a file we have just read would be a lie — and it would stop the one
@@ -431,6 +449,9 @@ export async function replaceProfileFromResume(
           strength,
           composedAt: new Date(),
           stale: true,
+          // Emptied, not kept: these are somebody's confirmations of a resume
+          // that has just been replaced.
+          confirmedSections: [],
           // Whatever the last editorial pass overwrote, it overwrote on a
           // profile that no longer exists. Offering to restore it here would
           // put somebody's previous resume back over the one they just

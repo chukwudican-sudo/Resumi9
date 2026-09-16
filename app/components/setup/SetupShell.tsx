@@ -7,6 +7,8 @@ import { hasQuantity, profileStrength } from '../../lib/profileStrength';
 import PdfPreview from '../applications/PdfPreview';
 import MaterialList from './MaterialList';
 import { checkReadiness } from '../../lib/readiness';
+import { validateContact, type ContactField } from '../../lib/contactValidation';
+import { confirmSectionReviewed } from '../../server/actions';
 import DownloadPdf from '../applications/DownloadPdf';
 import PolishButton from './PolishButton';
 import type { ResumeSection, ResumeStructure } from '../../lib/types';
@@ -22,11 +24,10 @@ import ReadinessPanel from './ReadinessPanel';
 import Stages from '../Stages';
 import Takeover from '../Takeover';
 import NavTabs from '../NavTabs';
-import { POLISH_STEPS, REASSURE } from '../../lib/waits';
+import { REASSURE } from '../../lib/waits';
 import type { WaitControl, WaitRequest } from './waitControl';
 import { useConfirm } from '../undo/ConfirmProvider';
 import RemoveSection from './RemoveSection';
-import { polishMasterResume } from '../../server/actions';
 
 /**
  * Which section is open. Any key this person's resume actually has, plus
@@ -51,6 +52,7 @@ export default function SetupShell({
   polished,
   stale,
   savedAt,
+  initialConfirmed,
 }: {
   initialEntries: EntryWithBullets[];
   initialFacts: ContactFact[];
@@ -60,6 +62,8 @@ export default function SetupShell({
   polished: ResumeStructure | null;
   stale: boolean;
   savedAt: string;
+  /** Sections already been through. See profiles.confirmedSections. */
+  initialConfirmed: string[];
 }) {
   const router = useRouter();
   const ask = useConfirm();
@@ -148,11 +152,28 @@ export default function SetupShell({
    * the word "LinkedIn" in the LinkedIn box, polished, downloaded, and went out
    * carrying a link that pointed at nothing.
    *
-   * Per visit rather than remembered. Saving is one click and it is the first
-   * thing on the page, while a rule that only checked new accounts would let
-   * every returning one straight past it.
+   * Read off the stored details rather than reset on arrival. What the save was
+   * ever for is the validation — so asking whether the stored values PASS that
+   * validation answers the same question without making somebody who changed
+   * nothing press Save again to get their own download button back. The word
+   * "LinkedIn" in the LinkedIn box still fails it, which is the case this
+   * exists for; editing makes the form dirty and the save runs again.
    */
-  const [contactSaved, setContactSaved] = useState(false);
+  const [contactSaved, setContactSaved] = useState(
+    () => Object.keys(validateContact(initialContact as unknown as Record<ContactField, string>)).length === 0,
+  );
+
+  /**
+   * Which sections have been been through, and saying so out loud.
+   *
+   * Kept locally as well as on the server so the tick lands on the press rather
+   * than after a round trip; the write is what makes it survive leaving.
+   */
+  const [confirmed, setConfirmed] = useState<string[]>(initialConfirmed);
+  function confirm(key: string) {
+    setConfirmed((c) => (c.includes(key) ? c : [...c, key]));
+    void confirmSectionReviewed(key);
+  }
   /**
    * Read, not discarded.
    *
@@ -179,7 +200,7 @@ export default function SetupShell({
   const built = useMemo(() => buildResume(entries, facts, sections), [entries, facts, sections]);
   // The rail and the page are read off the same plan, so they cannot disagree
   // about the order — which they did, visibly, until this.
-  const status = useMemo(() => sectionStatus(built, contactSaved), [built, contactSaved]);
+  const status = useMemo(() => sectionStatus(built, contactSaved, confirmed), [built, contactSaved, confirmed]);
   const open = useMemo(() => status.find((s) => s.key === section) ?? status[0], [status, section]);
   const resume = polished ?? built;
   const doneCount = status.filter((s) => s.done).length;
@@ -348,23 +369,6 @@ export default function SetupShell({
               if (!(await mayLeave())) return;
               setDirty(false);
 
-              if (usable && stale && contactSaved) {
-                waitControl.start({
-                  title: 'Tidying your resume.',
-                  steps: POLISH_STEPS,
-                  estimate: 'Usually about twenty seconds.',
-                  scope: 'pane',
-                });
-                try {
-                  await polishMasterResume();
-                  waitControl.finish();
-                } catch {
-                  // Not a reason to trap somebody on this page. The resume is
-                  // simply untidied, and the next Polish or Download does it.
-                  waitControl.cancel();
-                }
-              }
-
               router.push('/applications');
             }}
             className="rounded bg-accent px-5 py-2.5 text-sm font-medium text-ground transition hover:bg-accent-hover"
@@ -435,6 +439,7 @@ export default function SetupShell({
           */}
           <SetupUpload
             disabled={dirty || refreshing}
+            imported={entries.some((e) => e.source === 'resume_import')}
             entryCount={entries.length}
             sectionCount={sections.length}
             hasSkills={skillGroups.length > 0}
@@ -536,7 +541,7 @@ export default function SetupShell({
                 // cannot say what is actually stored.
                 stored={initialContact}
                 onChange={setContact}
-                onSaved={() => { setContactSaved(true); afterSave(); }}
+                onSaved={() => { setContactSaved(true); confirm('contact'); afterSave(); }}
                 onNext={() => setSection(nextKey)}
                 onDirty={setDirty}
               />
@@ -546,7 +551,7 @@ export default function SetupShell({
                 sectionKey={open.key}
                 label={open.label}
                 groups={open.key === 'skills' ? skillGroups : groupsOf(open.key)}
-                onSaved={afterSave}
+                onSaved={() => { confirm(open.key); afterSave(); }}
                 onDirty={setDirty}
               />
             ) : open.shape === 'prose' ? (
@@ -555,7 +560,7 @@ export default function SetupShell({
                 sectionKey={open.key}
                 label={open.label}
                 text={proseOf(open.key)}
-                onSaved={afterSave}
+                onSaved={() => { confirm(open.key); afterSave(); }}
                 onDirty={setDirty}
               />
             ) : open.shape === 'list' ? (
@@ -564,7 +569,7 @@ export default function SetupShell({
                 sectionKey={open.key}
                 label={open.label}
                 items={itemsOf(open.key)}
-                onSaved={afterSave}
+                onSaved={() => { confirm(open.key); afterSave(); }}
                 onDirty={setDirty}
               />
             ) : (
@@ -574,8 +579,8 @@ export default function SetupShell({
                 sectionKey={open.key}
                 label={open.label}
                 entries={entries}
-                onChange={afterSave}
-                onNext={() => setSection(nextKey)}
+                onChange={() => { if (open) confirm(open.key); afterSave(); }}
+                onNext={() => { if (open) confirm(open.key); setSection(nextKey); }}
                 onDirty={setDirty}
               />
             )}

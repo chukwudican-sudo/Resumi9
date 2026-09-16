@@ -50,6 +50,13 @@
       "when": 1789146671926,
       "tag": "0006_fancy_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789530139143,
+      "tag": "0007_tired_ikaris",
+      "breakpoints": true
     }
   ]
 }

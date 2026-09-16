@@ -43,6 +43,7 @@ export default async function SetupPage() {
       initialSections={sections}
       polished={polished}
       stale={profile?.stale ?? true}
+      initialConfirmed={(profile?.confirmedSections as string[] | undefined) ?? []}
       // Changes on every save, which is what the preview keys its rebuild off.
       // Counting entries would miss an edit to one that already existed.
       savedAt={profile?.updatedAt?.toISOString() ?? ''}

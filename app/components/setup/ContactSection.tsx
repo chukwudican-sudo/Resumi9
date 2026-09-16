@@ -24,7 +24,7 @@ const FIELDS: { key: keyof Contact; label: string; placeholder: string; optional
     label: 'Location',
     placeholder: 'Toronto, ON',
     optional: true,
-    hint: 'not printed on your resume — it keeps your job locations tidy',
+    hint: 'Not printed on your resume — keeps job locations tidy.',
   },
   { key: 'linkedin', label: 'LinkedIn', placeholder: 'linkedin.com/in/you', optional: true, wide: true },
   { key: 'github', label: 'GitHub', placeholder: 'github.com/you', optional: true, wide: true },
@@ -110,7 +110,6 @@ export default function ContactSection({
           <label key={f.key} className={`flex flex-col gap-2 ${f.wide ? 'sm:col-span-2' : ''}`}>
             <span className="text-[13.5px] text-ink-prose">
               {f.label} {f.optional ? <span className="text-ink-faint">optional</span> : null}
-              {f.hint ? <span className="text-ink-faint"> &mdash; {f.hint}</span> : null}
             </span>
             <input
               type="text"
@@ -137,6 +136,17 @@ export default function ContactSection({
             />
             {visible(f.key) ? (
               <span className="text-[12.5px] leading-snug text-flag">{visible(f.key)}</span>
+            ) : f.hint ? (
+              /*
+                Under the box, not in the label.
+                
+                Inside the label it wrapped to a second line, which made this
+                field's box start lower than the one beside it — two inputs on
+                one row, visibly out of step. Help text under the control is
+                also where a form normally puts it. Stood down while an error
+                is showing, so one box never carries two lines of explanation.
+              */
+              <span className="text-[12px] leading-snug text-ink-faint">{f.hint}</span>
             ) : null}
           </label>
         ))}

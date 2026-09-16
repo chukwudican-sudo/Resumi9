@@ -128,7 +128,7 @@ export default function StrengthenPanel({
                   setAnswers(next);
                 }}
                 placeholder="Your answer, or leave blank to skip"
-                className="w-full resize-none rounded border border-accent-line bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
+                className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-accent-line bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
               />
             </div>
           ))}

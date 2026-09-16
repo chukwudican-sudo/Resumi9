@@ -251,7 +251,7 @@ export default function InterviewFlow({
                       }
                     }}
                     placeholder="Type your answer…"
-                    className="w-full resize-none px-5 py-5 text-base leading-relaxed text-ink outline-none placeholder:text-ink-ghost"
+                    className="[field-sizing:content] max-h-[10lh] w-full resize-none px-5 py-5 text-base leading-relaxed text-ink outline-none placeholder:text-ink-ghost"
                   />
                   <div className="flex items-center justify-between border-t border-rule-soft bg-ground-panel/50 px-4 py-3">
                     <span className="hidden text-[12.5px] text-ink-faint sm:block">
