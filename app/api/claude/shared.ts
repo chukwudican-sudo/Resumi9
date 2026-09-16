@@ -230,6 +230,39 @@ export const EXTRA_SECTIONS_SCHEMA = {
  * roles at the same employer apart, which is the exact failure its comments
  * record being built to catch.
  */
+/**
+ * A tailored bullet: what it now says, and which bullets it came from.
+ *
+ * `from` is the whole point. Three revisions of the prompt could not stop a
+ * faithful rewrite growing a clause nobody earned — "…, working both
+ * independently and collaboratively" on a bullet about a 3-person team, "…,
+ * using Git-based version control throughout" on a bullet about a CI pipeline.
+ * Naming the source makes the claim checkable in code instead of arguable in
+ * prose.
+ *
+ * `text` is optional, and leaving it out is the normal answer for a bullet that
+ * did not need changing. It also pays for the check: output tokens are the
+ * whole of the wait, and most bullets on most resumes come back as they went.
+ */
+const TAILORED_BULLET = {
+  type: 'object' as const,
+  properties: {
+    from: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+      description:
+        'The id or ids this bullet is a rewrite of, copied from the profile you were given — a bullet id like "e0.b1", or a fact id like "f3". Every bullet must name at least one, and they must belong to THIS entry: a bullet built from another entry\'s work is that work moved, which is not allowed. Facts with no entry of their own may be used anywhere.',
+    },
+    text: {
+      type: 'string' as const,
+      description:
+        'The rewritten bullet. Leave it out entirely when the bullet is right as it stands — that is the normal answer for a bullet already written in this posting\'s terms, and it costs nothing to send.',
+    },
+  },
+  required: ['from'],
+  additionalProperties: false as const,
+};
+
 const TAILORED_STRUCTURE_SCHEMA = {
   ...RESUME_STRUCTURE_SCHEMA,
   properties: {
@@ -239,31 +272,50 @@ const TAILORED_STRUCTURE_SCHEMA = {
       items: {
         type: 'object' as const,
         properties: {
+          // Echoed back, so a bullet's source can be checked against the entry
+          // it now sits in.
+          id: { type: 'string' as const, description: 'The entry id from the profile, returned unchanged.' },
           // Identity for pairUp. Not editable, and not optional.
           school: { type: 'string' as const },
           dates: { type: 'string' as const },
           bullets: {
             type: 'array' as const,
-            items: { type: 'string' as const },
+            items: TAILORED_BULLET,
             description: 'Relevant coursework, honours, thesis. Often empty.',
           },
         },
-        required: ['school', 'dates'],
+        required: ['id', 'school', 'dates'],
         additionalProperties: false as const,
       },
     },
-    experience: RESUME_STRUCTURE_SCHEMA.properties.experience,
+    experience: {
+      ...RESUME_STRUCTURE_SCHEMA.properties.experience,
+      items: {
+        type: 'object' as const,
+        properties: {
+          id: { type: 'string' as const, description: 'The entry id from the profile, returned unchanged.' },
+          title: { type: 'string' as const },
+          dates: { type: 'string' as const },
+          org: { type: 'string' as const },
+          location: { type: 'string' as const },
+          bullets: { type: 'array' as const, items: TAILORED_BULLET },
+        },
+        required: ['id', 'title', 'dates', 'org', 'location', 'bullets'],
+        additionalProperties: false as const,
+      },
+    },
     projects: {
       ...RESUME_STRUCTURE_SCHEMA.properties.projects,
       items: {
         type: 'object' as const,
         properties: {
+          id: { type: 'string' as const, description: 'The entry id from the profile, returned unchanged.' },
           name: { type: 'string' as const },
           tech: { type: 'string' as const },
           dates: { type: 'string' as const },
-          bullets: { type: 'array' as const, items: { type: 'string' as const } },
+          bullets: { type: 'array' as const, items: TAILORED_BULLET },
         },
-        required: ['name', 'tech', 'dates', 'bullets'],
+        required: ['id', 'name', 'tech', 'dates', 'bullets'],
         additionalProperties: false as const,
       },
     },

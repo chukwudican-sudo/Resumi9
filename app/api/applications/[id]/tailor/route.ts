@@ -8,6 +8,8 @@ import { requireUserId } from '../../../../server/auth';
 import { MONTHLY_CREDITS } from '../../../../lib/credits';
 import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
+import { annotate, resolveTailored } from '../../../../lib/provenance';
+import { applyFlags, checkBullets } from '../../../../lib/honesty';
 import {
   getActiveRules,
   getUser,
@@ -101,29 +103,38 @@ export async function POST(_request: Request, { params }: { params: { id: string
     // material the tailor may use, never as licence to invent: each line is
     // something the person said in their own words, so working one in is
     // reporting rather than embellishing.
+    /*
+     * Every bullet and fact carries an id now, and the facts carry the entry
+     * they were answered about.
+     *
+     * That last part was being thrown away: `getSupportingFacts` selects
+     * `entryId` and this route mapped it to text alone, so a fact about one job
+     * was evidence for every job. It is what makes "this bullet moved work in
+     * from somewhere else" a thing code can see rather than a thing to argue
+     * about in the prompt.
+     */
+    const { profile: annotated, index } = annotate(structure, supporting);
+
     const said = supporting.length
-      ? [
-          'Also true of this person, in their own words, from questions they have answered. These are NOT yet on the resume. Use any that the posting makes relevant — worked into an existing entry rather than added as a new one — and ignore the rest. They are the only other thing you may draw on, and you may not extrapolate beyond what each one says:',
-          supporting.map((f) => `- ${f.text}`).join('\n'),
-        ].join('\n')
+      ? 'Also true of this person, in their own words, from questions they have answered — the `facts` list above. These are NOT yet on the resume. Use any that the posting makes relevant, worked into an existing entry rather than added as a new one, and name its id in that bullet\'s "from". They are the only other thing you may draw on, and you may not extrapolate beyond what each one says.'
       : null;
 
     const content = [
       {
         type: 'text' as const,
         text: [
-          'Their profile — the Resume Structure to edit. This is the resume of record; keep the same entries, dates, and section identities, and rewrite freely within them:',
+          'Their profile — the Resume Structure to edit. This is the resume of record; keep the same entries, dates, and section identities, and rewrite freely within them. Every entry and bullet carries an id: return each entry\'s id unchanged, and name in each bullet\'s "from" the bullet or fact ids it is a rewrite of.',
           '```json',
           // Minified. The two-space indent was about three hundred tokens of
           // pure whitespace re-sent on every tailor, and the model does not read
           // it any better for being pretty.
-          JSON.stringify(structure),
+          JSON.stringify(annotated),
           '```',
           said,
           `Job posting — Company: ${posting?.company ?? '(not provided)'}, Role: ${posting?.role ?? '(not provided)'}\n${posting?.description ?? '(no description)'}`,
           said
-            ? 'Produce the tailored resume now via submit_tailored_resume. The structure and the lines above it are your only sources for what this person has done — tailor within them and invent nothing to fill gaps.'
-            : 'Produce the tailored resume now via submit_tailored_resume. The structure above is your only source for what this person has done, so tailor within it and invent nothing to fill gaps.',
+            ? 'Produce the tailored resume now via submit_tailored_resume. The structure and the facts above are your only sources for what this person has done — tailor within them and invent nothing to fill gaps. A bullet you are leaving as it stands needs only its "from"; leave its text out.'
+            : 'Produce the tailored resume now via submit_tailored_resume. The structure above is your only source for what this person has done, so tailor within it and invent nothing to fill gaps. A bullet you are leaving as it stands needs only its "from"; leave its text out.',
         ]
           .filter(Boolean)
           .join('\n\n'),
@@ -155,7 +166,27 @@ export async function POST(_request: Request, { params }: { params: { id: string
     // sixteen entries and mentioned that role in none of them, and its warnings
     // were empty — three self-reports from one pass, all silent, which is why
     // this is arithmetic rather than another line of prompt.
-    const guarded = validateTailored(structure, toolInput.structure);
+    /*
+     * Three passes, in this order, and the order is the point.
+     *
+     * `resolveTailored` turns each bullet back into a sentence and records the
+     * profile bullet it named as its source. `checkBullets` compares what the
+     * sentence claims against that source and nothing else — a posting's words
+     * are not evidence, and neither is another entry's work. `applyFlags` puts
+     * the person's own wording back where a claim was not earned.
+     *
+     * Only then does the guard run, so it is checking the resume that will
+     * actually be saved: a bullet reverted here must still be counted when it
+     * decides whether anything was dropped.
+     */
+    const resolved = resolveTailored(toolInput.structure, index);
+    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? []);
+    const honest = applyFlags(resolved.structure, flags);
+    if (flags.length) {
+      console.error(`[Resumi9] Tailoring made ${flags.length} claim(s) the profile does not support; put back.`);
+    }
+
+    const guarded = validateTailored(structure, honest.structure);
     const surfaced = surfaceRepairs(guarded.repairs);
 
     /*
@@ -211,8 +242,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
       ],
       // Guard lines lead. The point of a restore notice is lost at item
       // fourteen of sixteen.
-      log: [...surfaced.log, ...(toolInput.log ?? [])],
-      warnings: [...surfaced.warnings, ...(toolInput.warnings ?? [])],
+      // Guard lines lead, then what was put back for being unsupported, then
+      // the model's own account of what it did. The model's line comes last on
+      // purpose: it is the only one of the three nobody verified.
+      log: [...surfaced.log, ...honest.log, ...(toolInput.log ?? [])],
+      warnings: [...surfaced.warnings, ...honest.warnings, ...(toolInput.warnings ?? [])],
       // The column exists and nothing has ever read it back, so the model is
       // no longer asked to produce a number for it.
       estimatedPages: null,

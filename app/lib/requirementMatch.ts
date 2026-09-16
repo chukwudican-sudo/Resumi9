@@ -114,7 +114,14 @@ export function patternFor(way: string): RegExp {
     .replace(/i[sz](e|ed|es|ing|ation|ations|er|ers)(?![a-z])/g, 'i[sz]$1')
     .replace(/y[sz](e|ed|es|ing|er|ers)(?![a-z])/g, 'y[sz]$1')
     .replace(/el{1,2}(ing|ed|er|ers)(?![a-z])/g, 'el{1,2}$1')
-    .replace(/[\s-]+/g, '[\\s\\-]?');
+    // A separator that may not be there at all. "Power BI" is written "PowerBI"
+    // and "back-end" is written "backend" — and when a requirement term is
+    // checked against the bullet it came from, a hyphen that only exists on one
+    // side reads as a different word. That cost a good rewrite once: "worked
+    // across mobile, backend, and web" became "front-end (mobile, web) and
+    // back-end development" — the same fact in the posting's vocabulary, which
+    // is the whole job — and the honesty check called it an invented claim.
+    .replace(/[\s-]+/g, '[\\s\\-]*');
   // A plural on the resume still counts: "APIs" for "API". Not on one- and
   // two-letter terms, where an s makes a different word ("C" and "CS").
   const plural = way.length >= 3 && /[a-z]$/.test(way) && !way.endsWith('s') ? 's?' : '';

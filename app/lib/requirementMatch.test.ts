@@ -61,6 +61,17 @@ test('spacing does not hide a tool', () => {
   assert.equal(found('power bi'), true); // written "PowerBI"
 });
 
+test('a hyphen the resume does not use is not a different word', () => {
+  // "back-end development" asked for, "backend" written. The separator may be a
+  // space, a hyphen, or nothing at all, in either direction.
+  const r = resume({
+    skills: [{ category: 'Engineering', items: 'Backend, Frontend, Full Stack' }],
+  });
+  assert.equal(found('back-end', r), true);
+  assert.equal(found('front end', r), true);
+  assert.equal(found('full-stack', r), true);
+});
+
 test('a vendor prefix is not part of the product', () => {
   assert.equal(found('ms excel'), true);
   assert.equal(found('excel'), true);

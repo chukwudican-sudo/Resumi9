@@ -14,6 +14,8 @@ import {
   saveResume,
 } from '../../../../server/db/repository';
 import { capacityResponse, INSTRUCT_TOOL, errorResponse, SERVICE_UNAVAILABLE } from '../../../claude/shared';
+import { annotate, resolveTailored } from '../../../../lib/provenance';
+import { applyFlags, checkBullets } from '../../../../lib/honesty';
 
 export const maxDuration = 60;
 
@@ -97,15 +99,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const structure = current.structure as ResumeStructure;
   const posting = record.posting;
 
+  /*
+   * Ids on the version being edited, so an edit can be checked the same way a
+   * tailor is.
+   *
+   * The evidence is deliberately the version on screen rather than the profile.
+   * An edit is asked to change THIS resume — "shorten the Aegon bullets" means
+   * the bullets as they now read — so its source is the text in front of the
+   * person. What that costs is that an invention which survived the tailor
+   * becomes evidence for the next edit; what it buys is that every ordinary
+   * edit is not flagged for departing from a profile it was never editing.
+   */
+  const { profile: annotated, index } = annotate(structure);
+
   const content = [
     {
       type: 'text' as const,
       text: [
-        'Current tailored resume — the Resume Structure to edit:',
+        'Current tailored resume — the Resume Structure to edit. Every entry and bullet carries an id: return each entry\'s id unchanged, and name in each bullet\'s "from" the bullet ids it is a rewrite of. A bullet you are not touching needs only its "from", with no text.',
         '```json',
         // Minified. The two-space indent was pure whitespace re-sent on every
         // edit, and the model does not read it any better for being pretty.
-        JSON.stringify(structure),
+        JSON.stringify(annotated),
         '```',
         `Job posting — Company: ${posting?.company ?? '(not provided)'}, Role: ${posting?.role ?? '(not provided)'}\n${posting?.description ?? '(no description)'}`,
         `The person has asked for one change: "${instruction}"`,
@@ -143,7 +158,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // is told to say so. "Restored from your profile, unedited" was untrue on
     // every edit, and visibly so: the restored entries came back carrying the
     // previous tailoring's wording.
-    const guarded = validateTailored(structure, toolInput.structure, {
+    /*
+     * The same three passes the tailor runs, for the same reason.
+     *
+     * An edit is a rewrite too, and the one place it is likelier to drift: the
+     * model is rewriting a rewrite, with an instruction that often asks for
+     * emphasis. "Say I led the team" has to come back reverted, while "I used
+     * Docker at Droady, add it" is the person telling it something true.
+     */
+    const resolved = resolveTailored(toolInput.structure, index);
+    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? []);
+    const honest = applyFlags(resolved.structure, flags);
+
+    // The source here is the version on screen, not the profile — so the guard
+    // is told to say so. "Restored from your profile, unedited" was untrue on
+    // every edit, and visibly so: the restored entries came back carrying the
+    // previous tailoring's wording.
+    const guarded = validateTailored(structure, honest.structure, {
       sourceLabel: 'the previous version',
     });
     const surfaced = surfaceRepairs(guarded.repairs);
@@ -166,8 +197,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // match tile would go blank on every edit.
       matchScore: current.matchScore,
       missingRequirements: (current.missingRequirements as string[]) ?? [],
-      log: [`You asked: "${instruction}"`, ...surfaced.log, ...(toolInput.log ?? [])],
-      warnings: [...surfaced.warnings, ...(toolInput.warnings ?? [])],
+      log: [`You asked: "${instruction}"`, ...surfaced.log, ...honest.log, ...(toolInput.log ?? [])],
+      warnings: [...surfaced.warnings, ...honest.warnings, ...(toolInput.warnings ?? [])],
       // Carried, not asked for. The model's guess was wrong every time it was
       // checked — "slightly over 1 page" for a resume that filled two — so the
       // tool no longer requests it. A real measurement replaces this later.
