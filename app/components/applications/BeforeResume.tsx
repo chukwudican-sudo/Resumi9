@@ -1,10 +1,11 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Stages from '../Stages';
 import { REASSURE, TAILOR_STEPS } from '../../lib/waits';
 import type { RequirementMatch } from '../../lib/requirementMatch';
 
-/** The shape of a resume page, for the one that is still being written. */
+/** The shape of a resume page, for the one that does not exist yet. */
 const PAGE_SECTIONS: number[][] = [
   [94, 86],
   [90, 96, 78, 88],
@@ -19,25 +20,115 @@ const LOG_LINES: number[][] = [
 ];
 
 /**
- * The application page while its resume is being written.
- *
- * Replaces a full-window wait that had nothing on it for thirty seconds. Most
- * resume tools show what a posting asks for, and what you already have, the
- * moment they have read it — the writing comes after — and here the posting
- * was read before the tailor started, so there is no reason to hide that behind
- * a spinner.
+ * What this screen is for at this moment. Only the middle panel changes.
+ */
+export type BeforeResumeState =
+  | { kind: 'writing' }
+  | {
+      kind: 'failed';
+      /** What the server said went wrong, in its own words. */
+      message: string;
+      /** Whether the credit came back. Only claimed when the server says so. */
+      creditKept: boolean;
+      onRetry: () => void;
+    }
+  | { kind: 'ready'; onStart: () => void };
+
+/**
+ * The application page before there is a resume on it.
  *
  * **Same three columns as the finished page, in the same places,** so when the
  * resume lands the screen fills in rather than being swapped for another: the
  * change log on the left, the page in the middle, what you act on at the right.
  *
- * **Nothing here can be pressed.** The composer is drawn, not live — it is the
- * control that will be there — because every action on this page acts on a
- * resume that does not exist yet, and the one that would work is a second
- * tailor, which is a second credit.
+ * What the posting asks for is already known — it was read before tailoring
+ * started — so it is on screen throughout, instead of a loading screen with
+ * nothing on it.
+ *
+ * **It covers failing, too, and that is why it exists in this shape.** A failed
+ * tailor used to drop people onto a separate "Ready when you are." page, which
+ * is the page this app decided not to have: you land somewhere you were not,
+ * your match is gone, and the only sign anything went wrong is a line of small
+ * text under a button that starts the whole thing over. One tester pressed it
+ * five times in three minutes. Failing now changes this middle panel and leaves
+ * the rest of the screen exactly where it was.
+ *
+ * **Nothing on the right can be pressed.** The composer is drawn, not live — it
+ * is the control that will be there — because every action on this page acts on
+ * a resume that does not exist yet.
  */
-export default function TailorWait({ match }: { match: RequirementMatch }) {
+export default function BeforeResume({
+  match,
+  state,
+}: {
+  match: RequirementMatch;
+  state: BeforeResumeState;
+}) {
   const total = match.have.length + match.missing.length;
+
+  let middle: ReactNode;
+  if (state.kind === 'writing') {
+    middle = (
+      <div className="w-full max-w-[420px] rounded-md border border-rule bg-ground-surface px-5 pb-3 pt-5">
+        <h1 className="font-serif text-[26px] leading-[1.1]">Writing your resume for this one.</h1>
+        <div className="mt-3">
+          <Stages steps={TAILOR_STEPS} done={false} reassure={REASSURE} />
+        </div>
+      </div>
+    );
+  } else if (state.kind === 'failed') {
+    middle = (
+      <div className="w-full max-w-[420px] rounded-md border border-rule bg-ground-surface px-5 py-5" role="status">
+        <h1 className="font-serif text-[26px] leading-[1.1]">That didn&rsquo;t work.</h1>
+        <p className="mt-2.5 text-[13.5px] leading-relaxed text-ink-prose">{state.message}</p>
+        {/*
+          Claimed only when the server says it happened. Every failure after the
+          spend refunds, but running out of credits and an unbuilt profile are
+          refused before anything is spent — and telling somebody their credit
+          came back when it never left is the kind of small lie that costs trust
+          in everything else on the page.
+        */}
+        {state.creditKept ? (
+          <p className="mt-2.5 flex items-center gap-2 text-[13.5px] text-ink">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2F5D50" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+            Your credit wasn&rsquo;t used.
+          </p>
+        ) : null}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={state.onRetry}
+            className="rounded bg-accent px-5 py-2.5 text-[13.5px] font-medium text-ground transition hover:bg-accent-hover"
+          >
+            Try again
+          </button>
+          <span className="text-[12px] text-ink-muted">Usually about thirty seconds.</span>
+        </div>
+      </div>
+    );
+  } else {
+    middle = (
+      <div className="w-full max-w-[420px] rounded-md border border-rule bg-ground-surface px-5 py-5">
+        <h1 className="font-serif text-[26px] leading-[1.1]">Write your resume for this one.</h1>
+        <p className="mt-2.5 text-[13.5px] leading-relaxed text-ink-prose">
+          Your match is already on the right. Tailoring rewrites your profile around this job,
+          keeping everything true.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={state.onStart}
+            className="rounded bg-accent px-5 py-2.5 text-[13.5px] font-medium text-ground transition hover:bg-accent-hover"
+          >
+            Tailor my resume
+          </button>
+          <span className="text-[12px] text-ink-muted">Uses 1 credit &middot; about thirty seconds</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="grid min-h-0 flex-grow grid-cols-1 overflow-y-auto lg:grid-cols-[320px_minmax(0,1fr)_440px] lg:overflow-hidden">
@@ -58,16 +149,18 @@ export default function TailorWait({ match }: { match: RequirementMatch }) {
       </div>
 
       <div className="order-1 flex flex-col items-center gap-4 bg-ground-band px-6 py-7 lg:order-none lg:overflow-y-auto">
-        <div className="w-full max-w-[420px] rounded-md border border-rule bg-ground-surface px-5 pb-3 pt-5">
-          <h1 className="font-serif text-[26px] leading-[1.1]">Writing your resume for this one.</h1>
-          <div className="mt-3">
-            <Stages steps={TAILOR_STEPS} done={false} reassure={REASSURE} />
-          </div>
-        </div>
+        {middle}
 
+        {/*
+          The page that is coming. It pulses only while something is actually
+          being written — a skeleton still shimmering under "That didn't work"
+          would be the screen contradicting itself.
+        */}
         <div
           aria-hidden="true"
-          className="flex aspect-[8.5/11] w-full max-w-[420px] animate-pulse flex-col gap-2.5 border border-rule-field bg-ground-surface px-9 py-8 motion-reduce:animate-none"
+          className={`flex aspect-[8.5/11] w-full max-w-[420px] flex-col gap-2.5 border border-rule-field bg-ground-surface px-9 py-8 ${
+            state.kind === 'writing' ? 'animate-pulse motion-reduce:animate-none' : 'opacity-60'
+          }`}
         >
           <div className="mx-auto h-2.5 w-[46%] rounded bg-rule" />
           <div className="mx-auto h-1.5 w-[62%] rounded bg-rule-soft" />

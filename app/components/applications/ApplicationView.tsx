@@ -14,7 +14,7 @@ import type { ApplicationStatus } from './ApplicationRow';
 import PdfPreview from './PdfPreview';
 import StrengthenPanel from './StrengthenPanel';
 import { restoreResumeVersion } from '../../server/actions';
-import TailorWait from './TailorWait';
+import BeforeResume from './BeforeResume';
 import { useConfirm } from '../undo/ConfirmProvider';
 import type { RequirementMatch } from '../../lib/requirementMatch';
 
@@ -58,11 +58,13 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
   const router = useRouter();
   const ask = useConfirm();
   // Starts true when arriving to tailor, so the first paint is already the wait.
-  // Starting false put "Ready when you are." and a live button on screen for
-  // the frame before the effect below runs — a button that, pressed, buys a
-  // second resume.
+  // Starting false put the start panel and its live button on screen for the
+  // frame before the effect below runs — a button that, pressed, buys a second
+  // resume.
   const [tailoring, setTailoring] = useState(startTailor);
   const [error, setError] = useState<string | null>(null);
+  /** Whether the failed attempt's credit came back, as the server reported it. */
+  const [creditKept, setCreditKept] = useState(false);
   const [tab, setTab] = useState<'review' | 'posting'>('review');
   const [instruction, setInstruction] = useState('');
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -101,18 +103,20 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
   async function tailor(): Promise<boolean> {
     setTailoring(true);
     setError(null);
+    setCreditKept(false);
     try {
       const response = await fetch(`/api/applications/${applicationId}/tailor`, { method: 'POST' });
       const data = await response.json();
       if (!response.ok) {
         setError(data?.error?.message ?? 'Something went wrong. Please try again.');
+        setCreditKept(data?.error?.creditKept === true);
         return false;
       }
       // Inside the transition, so `pending` stays true until the server render
       // actually lands. router.refresh() returns void — it does not resolve
       // when the new page arrives — so clearing the flag straight after it put
-      // "Ready when you are." and a live button back on screen while the resume
-      // was still being written. A second click there spends a second credit.
+      // the start panel and its live button back on screen while the resume was
+      // still being written. A second click there spends a second credit.
       startTransition(() => router.refresh());
       return true;
     } catch {
@@ -189,8 +193,8 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
           <Link
             href="/applications"
             // Inert while a tailor runs. Leaving is harmless in itself, but coming
-            // back before it finishes lands on "Ready when you are." with a live
-            // button, and pressing that spends a second credit on the same resume.
+            // back before it finishes lands on the start panel with a live button,
+            // and pressing that spends a second credit on the same resume.
             aria-disabled={busy || undefined}
             tabIndex={busy ? -1 : undefined}
             className={`flex items-center gap-2.5 transition hover:opacity-70 ${busy ? 'pointer-events-none' : ''}`}
@@ -231,51 +235,34 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
         ) : null}
       </div>
 
-      {busy ? (
+      {busy || !resume ? (
         /*
-         * The wait, on the page rather than over it.
+         * One screen before there is a resume, in three states.
          *
          * What the posting asks for is already known — it was read before this
          * started — so it is on screen while the resume is being written, instead
          * of a loading screen with nothing on it. Same columns as the finished
          * page, so nothing jumps when the resume lands.
+         *
+         * Failing used to land on a separate "Ready when you are." page — the
+         * page this app had already decided not to have, because pressing a
+         * button to start something you just asked for is a step nobody wants.
+         * It survived as the empty state, so every failed tailor sent people
+         * there: match gone, and one line of small text under a button that
+         * starts the whole thing again. A tester pressed it five times in three
+         * minutes. Now failing changes the middle of this screen and nothing
+         * else moves.
          */
-        <TailorWait match={requirementMatch} />
-      ) : !resume ? (
-        <div className="flex flex-grow items-center justify-center px-6 py-16">
-          <div className="max-w-[520px] text-center">
-            <h1 className="font-serif text-[38px] leading-[1.1]">Ready when you are.</h1>
-            <p className="mt-4 text-[15.5px] leading-relaxed text-ink-prose">
-              We have the posting. Tailoring rewrites your profile around it &mdash; keeping
-              everything true, and putting what matters for this role first.
-            </p>
-
-            <button
-              type="button"
-              onClick={tailor}
-              className="mt-8 rounded bg-accent px-8 py-4 text-[15px] font-medium text-ground transition hover:bg-accent-hover"
-            >
-              Tailor my resume
-            </button>
-
-            {posting.requirements.length > 0 ? (
-              <div className="mt-10 text-left">
-                <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">
-                  What they ask for
-                </span>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {posting.requirements.slice(0, 12).map((r) => (
-                    <span key={r} className="rounded-[3px] bg-ground-band px-2.5 py-1 text-xs text-ink-prose">
-                      {r}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {error ? <p className="mt-6 text-sm text-flag">{error}</p> : null}
-          </div>
-        </div>
+        <BeforeResume
+          match={requirementMatch}
+          state={
+            busy
+              ? { kind: 'writing' }
+              : error
+                ? { kind: 'failed', message: error, creditKept, onRetry: () => void tailor() }
+                : { kind: 'ready', onStart: () => void tailor() }
+          }
+        />
       ) : (
         <div className="grid min-h-0 flex-grow grid-cols-1 overflow-y-auto lg:grid-cols-[320px_minmax(0,1fr)_440px] lg:overflow-hidden">
           {/*

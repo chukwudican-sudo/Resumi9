@@ -215,7 +215,10 @@ export async function POST(_request: Request, { params }: { params: { id: string
       return errorResponse(
         {
           type: 'generic',
-          message: 'That came back unusable, so nothing was saved. Your credit was not used — try again.',
+          // The screen says the credit came back and offers the retry, so
+          // neither belongs in the sentence as well.
+          message: 'That came back unusable, so nothing was saved.',
+          creditKept: true,
         },
         502,
       );
@@ -333,8 +336,8 @@ export async function POST(_request: Request, { params }: { params: { id: string
       return errorResponse(
         {
           type: 'generic',
-          message:
-            'That took longer than we allow and was stopped. Your credit was not used — try again.',
+          message: 'That took longer than we allow and was stopped.',
+          creditKept: true,
         },
         504,
       );
@@ -343,7 +346,10 @@ export async function POST(_request: Request, { params }: { params: { id: string
     const refused = capacityResponse(error);
     if (refused) return refused;
     if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
-      return errorResponse({ type: 'auth', message: 'Your API key may be invalid or out of credits.' }, 401);
+      return errorResponse(
+        { type: 'auth', message: 'Your API key may be invalid or out of credits.', creditKept: true },
+        401,
+      );
     }
     // A timeout is not a dropped connection, and saying so sends people to
     // check a router that is working fine. APIConnectionTimeoutError EXTENDS
@@ -354,16 +360,20 @@ export async function POST(_request: Request, { params }: { params: { id: string
       return errorResponse(
         {
           type: 'network',
-          // The refund above already ran, and saying so is the difference
-            // between trying again and assuming it cost something.
-            message:
-              'That took longer than we allow and was stopped. Your credit was not used — try again.',
+          // The refund above already ran; creditKept is how the screen knows to
+          // say so, which is the difference between trying again and assuming
+          // it cost something.
+          message: 'That took longer than we allow and was stopped.',
+          creditKept: true,
         },
         504,
       );
     }
     if (error instanceof Anthropic.APIConnectionError) {
-      return errorResponse({ type: 'network', message: 'Your internet connection dropped.' }, 503);
+      return errorResponse(
+        { type: 'network', message: 'Your internet connection dropped.', creditKept: true },
+        503,
+      );
     }
     // Cut off part way through, so whatever arrived is half a resume. It used
     // to be handed to the guard, which restored the missing half from the
@@ -372,15 +382,16 @@ export async function POST(_request: Request, { params }: { params: { id: string
       return errorResponse(
         {
           type: 'generic',
-          message: 'That came back cut off, so nothing was saved. Your credit was not used — try again.',
+          message: 'That came back cut off, so nothing was saved.',
+          creditKept: true,
         },
         502,
       );
     }
     if (error instanceof NoToolUseError) {
-      return errorResponse({ type: 'generic', message: SERVICE_UNAVAILABLE }, 502);
+      return errorResponse({ type: 'generic', message: SERVICE_UNAVAILABLE, creditKept: true }, 502);
     }
     console.error('[Resumi9] Tailoring failed:', error);
-    return errorResponse({ type: 'generic', message: SERVICE_UNAVAILABLE }, 502);
+    return errorResponse({ type: 'generic', message: SERVICE_UNAVAILABLE, creditKept: true }, 502);
   }
 }

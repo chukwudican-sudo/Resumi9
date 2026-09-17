@@ -13,6 +13,16 @@ export type ApiErrorType = 'network' | 'auth' | 'generic' | 'timeout';
 export interface ApiErrorPayload {
   type: ApiErrorType;
   message: string;
+  /**
+   * Whether the credit for this attempt was given back.
+   *
+   * Set only where the handler actually refunded, because the screen says so
+   * out loud. Every failure after the spend refunds — but running out of
+   * credits, and a profile too thin to tailor, are refused before anything is
+   * spent, and telling somebody their credit came back when it never left is
+   * the kind of small lie that costs trust in everything else on the page.
+   */
+  creditKept?: boolean;
 }
 
 // ── Onboarding ─────────────────────────────────────────────────────────────
