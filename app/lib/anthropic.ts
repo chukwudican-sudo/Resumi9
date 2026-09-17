@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { recordUsage } from '../server/db/repository';
 import { assertWithinLimits } from '../server/limits';
 import { estimateCostUsd } from './pricing';
+import { recoverToolInput } from './toolInput';
 import type { TokenUsage } from './types';
 
 /**
@@ -263,6 +264,18 @@ export async function callClaude<T>(opts: CallClaudeOptions): Promise<CallClaude
 
   const toolUse = readToolUse(response);
 
+  /*
+   * Here, and not in any one route, because every call in the app has the same
+   * exposure. The answer that failed five tailors in a row arrived with all six
+   * of its fields jammed into the first one; an edit, a polish or a posting read
+   * can do exactly the same, and each would fail in its own way downstream.
+   * Logged, because a recovery nobody can count is a misbehaviour nobody sees.
+   */
+  const { input, repaired } = recoverToolInput(toolUse.input, opts.tool);
+  if (repaired.length) {
+    console.error(`[Resumi9] ${opts.kind}: answer arrived in the wrong shape; recovered ${repaired.join(', ')}.`);
+  }
+
   const raw = response.usage ?? {};
   const inputTokens = raw.input_tokens ?? 0;
   const outputTokens = raw.output_tokens ?? 0;
@@ -291,5 +304,5 @@ export async function callClaude<T>(opts: CallClaudeOptions): Promise<CallClaude
     sessionId: opts.sessionId ?? null,
   });
 
-  return { toolInput: toolUse.input as T, usage };
+  return { toolInput: input as T, usage };
 }
