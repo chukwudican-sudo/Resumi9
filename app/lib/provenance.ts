@@ -33,9 +33,36 @@ export interface SourceIndex {
   bullets: Map<string, SourceBullet>;
   /** Supporting facts, which are evidence too, keyed the same way. */
   facts: Map<string, { id: string; text: string; entry: string | null }>;
-  /** Entry id to the words that name it, for messages. */
-  entries: Map<string, string>;
+  /**
+   * Entry id to what identifies that entry on a finished resume.
+   *
+   * A name alone is not enough and used to be all this held: two roles at the
+   * same employer are one name and two jobs. It matters now because the cut
+   * ranking names whole entries as well as bullets, and dropping the wrong one
+   * takes a job off somebody's resume.
+   */
+  entries: Map<string, SourceEntry>;
 }
+
+/** Enough of an entry to find it again once the ids have been stripped. */
+export interface SourceEntry {
+  kind: Kind;
+  /** Employer, project name, or school. */
+  name: string;
+  dates: string;
+}
+
+/**
+ * One thing the ranking says may go.
+ *
+ * Bullets and whole entries in a single list, because that is the judgement
+ * being asked for: dropping one irrelevant project is usually better than
+ * thinning three good jobs, and only something that has read the posting can
+ * say which. Education never appears here — it is not cuttable at any rank.
+ */
+export type CutTarget =
+  | { kind: 'bullet'; text: string }
+  | { kind: 'entry'; section: 'experience' | 'projects'; name: string; dates: string };
 
 /** One tailored bullet, with what it says it came from. */
 export interface ResolvedBullet {
@@ -45,6 +72,16 @@ export interface ResolvedBullet {
   text: string;
   /** False when the model returned the id alone, meaning "unchanged". */
   changed: boolean;
+  /**
+   * The ids it named, whether or not they resolved.
+   *
+   * Kept beside `evidence` rather than folded into it because the two answer
+   * different questions. `evidence` is what the source SAID, which is what the
+   * honesty check compares against; this is what the model POINTED AT, which is
+   * how a ranking of ids — least relevant first, for cutting — finds the
+   * sentence it is talking about on the finished page.
+   */
+  from: string[];
   /** The source bullets and facts it named, in the entry it sits in. */
   evidence: string[];
   /** It named a source belonging to a different entry: a fact that moved. */
@@ -79,7 +116,11 @@ export function annotate(
   for (const kind of ['experience', 'projects', 'education'] as Kind[]) {
     profile[kind] = (structure[kind] ?? []).map((entry: any, i: number) => {
       const id = `${ENTRY_PREFIX[kind]}${i}`;
-      index.entries.set(id, nameOf(kind, entry));
+      index.entries.set(id, {
+        kind,
+        name: nameOf(kind, entry),
+        dates: typeof entry.dates === 'string' ? entry.dates : '',
+      });
       return {
         ...entry,
         id,
@@ -131,7 +172,7 @@ export function resolveTailored(
         if (typeof bullet === 'string') {
           if (bullet.trim()) {
             resolved.push(bullet);
-            bullets.push({ entry: entryId, text: bullet, changed: true, evidence: [], moved: false, unsourced: true });
+            bullets.push({ entry: entryId, text: bullet, changed: true, from: [], evidence: [], moved: false, unsourced: true });
           }
           continue;
         }
@@ -153,6 +194,7 @@ export function resolveTailored(
           entry: entryId,
           text,
           changed: Boolean(typeof bullet?.text === 'string' && bullet.text.trim()),
+          from,
           evidence: own.map((n) => n.text),
           moved: named.length > own.length,
           unsourced: named.length === 0,
@@ -165,4 +207,56 @@ export function resolveTailored(
   }
 
   return { structure, bullets };
+}
+
+/**
+ * A ranking of source ids turned into the sentences now on the page.
+ *
+ * The model ranks what it wrote, by the ids it was given. By the time anything
+ * cuts, two passes have been over those sentences: the honesty check may have
+ * put the person's own wording back where a rewrite claimed too much, and the
+ * guard may have restored a whole entry from the profile. So an id cannot be
+ * followed to the model's text and used — it has to be followed to whatever
+ * actually survived in its place.
+ *
+ * `reverted` maps a rewrite to what replaced it, which is exactly the shape the
+ * honesty check already produces. A bullet replaced by nothing is dropped here:
+ * it is not on the resume to cut.
+ */
+export function cutTargets(
+  ranking: unknown,
+  bullets: ResolvedBullet[],
+  index: SourceIndex,
+  reverted: Map<string, string> = new Map(),
+): CutTarget[] {
+  if (!Array.isArray(ranking)) return [];
+
+  const targets: CutTarget[] = [];
+  const seenText = new Set<string>();
+  const seenEntry = new Set<string>();
+
+  for (const id of ranking) {
+    if (typeof id !== 'string' || !id.trim()) continue;
+
+    // An entry id means the whole job or project may go.
+    const entry = index.entries.get(id);
+    if (entry) {
+      // Education is never cut, however it is ranked. A degree is not something
+      // anybody wants traded for a line of space.
+      if (entry.kind === 'education' || !entry.name.trim() || seenEntry.has(id)) continue;
+      seenEntry.add(id);
+      targets.push({ kind: 'entry', section: entry.kind, name: entry.name, dates: entry.dates });
+      continue;
+    }
+
+    const bullet = bullets.find((b) => b.from.includes(id));
+    if (!bullet) continue;
+    const text = reverted.has(bullet.text) ? reverted.get(bullet.text)! : bullet.text;
+    // Ranked twice, or merged from two sources the model listed separately.
+    if (!text.trim() || seenText.has(text)) continue;
+    seenText.add(text);
+    targets.push({ kind: 'bullet', text });
+  }
+
+  return targets;
 }

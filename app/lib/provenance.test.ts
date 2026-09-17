@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { annotate, resolveTailored } from './provenance';
+import { annotate, cutTargets, resolveTailored } from './provenance';
 import type { ResumeStructure } from './types';
 
 const SOURCE: ResumeStructure = {
@@ -119,6 +119,60 @@ test('a fact about the person, with no entry, is evidence anywhere', () => {
   );
   assert.equal(bullets[0].moved, false);
   assert.deepEqual(bullets[0].evidence, ['Speaks French']);
+});
+
+// ── the cut ranking ────────────────────────────────────────────────────────
+
+const rank = (ranking: unknown, tailored: unknown, reverted = new Map<string, string>()) => {
+  const { index } = annotate(SOURCE);
+  const { bullets } = resolveTailored(tailored, index);
+  return cutTargets(ranking, bullets, index, reverted);
+};
+
+test('a bullet id is followed to the sentence now on the page', () => {
+  const targets = rank(
+    ['e0.b1'],
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ from: ['e0.b1'], text: 'Worked across mobile, backend and web' }] }] },
+  );
+  assert.deepEqual(targets, [{ kind: 'bullet', text: 'Worked across mobile, backend and web' }]);
+});
+
+test('a bullet the honesty check put back is cut by what replaced it', () => {
+  // Following the id to the MODEL's sentence would name something that is no
+  // longer on the resume, and the cut would silently do nothing.
+  const targets = rank(
+    ['e0.b0'],
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ from: ['e0.b0'], text: 'Integrated payments end to end' }] }] },
+    new Map([['Integrated payments end to end', 'Contributed to payment integration']]),
+  );
+  assert.deepEqual(targets, [{ kind: 'bullet', text: 'Contributed to payment integration' }]);
+});
+
+test('an entry id offers the whole entry, named well enough to find it', () => {
+  const targets = rank(['p0'], {});
+  assert.deepEqual(targets, [{ kind: 'entry', section: 'projects', name: 'FraudWatch', dates: 'Aug 2026' }]);
+});
+
+test('education is never offered, however it is ranked', () => {
+  // A degree is not something anybody wants traded for a line of space.
+  assert.deepEqual(rank(['d0'], {}), []);
+});
+
+test('an id that means nothing is skipped rather than guessed at', () => {
+  assert.deepEqual(rank(['e9', 'nonsense', ''], {}), []);
+});
+
+test('ranking the same thing twice offers it once', () => {
+  const targets = rank(
+    ['p0', 'p0', 'e0.b0', 'e0.b0'],
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ from: ['e0.b0'] }] }] },
+  );
+  assert.equal(targets.length, 2);
+});
+
+test('a ranking that is not a list at all is no ranking', () => {
+  assert.deepEqual(rank(undefined, {}), []);
+  assert.deepEqual(rank('p0', {}), []);
 });
 
 test('the id is not left on the entry handed to the guard', () => {

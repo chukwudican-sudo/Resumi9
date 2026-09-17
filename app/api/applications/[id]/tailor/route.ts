@@ -8,10 +8,13 @@ import { requireUserId } from '../../../../server/auth';
 import { MONTHLY_CREDITS } from '../../../../lib/credits';
 import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
-import { annotate, resolveTailored } from '../../../../lib/provenance';
+import { annotate, cutTargets, resolveTailored } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
+import { fitToPages } from '../../../../lib/fit';
+import { COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
+import { pageTarget, type RuleCheck } from '../../../../lib/rules';
 import {
   getActiveRules,
   getUser,
@@ -31,7 +34,13 @@ interface TailorResult {
   log: string[];
   matchScore: number;
   missingRequirements: string[];
-  structuralChanges: { description: string; reason: string }[];
+  /**
+   * Bullet ids, least relevant to this posting first.
+   *
+   * A ranking and nothing else. How much of it gets spent is the app's
+   * decision, made against the compiler's page count — see lib/fit.ts.
+   */
+  cutOrder: string[];
   warnings: string[];
 }
 
@@ -221,28 +230,53 @@ export async function POST(_request: Request, { params }: { params: { id: string
     }
 
     /*
-     * How long it actually came out, if there is time to find out.
+     * How long it actually came out, and cutting it down if it runs over.
      *
      * Last, and optional, because of the rule that governs everything after the
      * model call: a finished resume is never thrown away for want of a number.
-     * A compile is about a second locally and one or two through the service,
-     * so it is only skipped when a tailor has already eaten the budget — and
-     * then `pageCount` is null, which reads as "not measured" rather than as a
-     * resume that broke somebody's page rule.
+     * Every compile here asks the budget first, so a tailor that has already
+     * eaten the clock degrades to "not measured" — a length nobody counted,
+     * which reads as guidance rather than as a broken page rule.
+     *
+     * The cutting is the app's, never the model's. It ranked the bullets by how
+     * little they matter for this posting; what that ranking is spent on is
+     * decided against the compiler's own page count, and if spending all of it
+     * still does not reach the target then none of it is spent.
      */
-    let pageCount: number | null = null;
-    if (deadline - Date.now() > 6_000) {
-      try {
-        pageCount = (await compileWithMeta(renderResumeLatex(guarded.structure))).pages;
-      } catch (err) {
-        // The resume is fine; only the measurement failed. It is not worth a
-        // person's tailor, and the log is where this belongs.
-        console.error('[Resumi9] Could not measure the tailored resume:', err);
-      }
-    }
+    const fitted = await fitToPages(guarded.structure, {
+      target: pageTarget(
+        rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
+      ),
+      /*
+       * The model's ranking, followed to the sentences that actually survived.
+       *
+       * Two passes have been over these bullets since it wrote them: the
+       * honesty check put the person's own wording back wherever a rewrite
+       * claimed more than its source, and the guard restored anything dropped.
+       * Following an id to the model's text would name sentences that are no
+       * longer on the page.
+       */
+      cuts: cutTargets(
+        toolInput.cutOrder,
+        resolved.bullets,
+        index,
+        new Map(flags.map((f) => [f.text, f.revertTo])),
+      ),
+      affords: () => affords(deadline, COMPILE_ESTIMATE_MS),
+      measure: async (candidate) => {
+        try {
+          return (await compileWithMeta(renderResumeLatex(candidate))).pages;
+        } catch (err) {
+          // The resume is fine; only the measurement failed. It is not worth a
+          // person's tailor, and the log is where this belongs.
+          console.error('[Resumi9] Could not measure the tailored resume:', err);
+          return null;
+        }
+      },
+    });
 
     const resumeId = await saveResume(userId, params.id, {
-      structure: guarded.structure,
+      structure: fitted.structure,
       matchScore: toolInput.matchScore ?? null,
       /*
        * The model's list, plus any requirement a literal check cannot find on
@@ -256,7 +290,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
        */
       missingRequirements: [
         ...(toolInput.missingRequirements ?? []),
-        ...matchRequirements(guarded.structure, (posting?.requirements as string[]) ?? []).missing.filter(
+        ...matchRequirements(fitted.structure, (posting?.requirements as string[]) ?? []).missing.filter(
           (gap) =>
             !(toolInput.missingRequirements ?? []).some((named) =>
               named.toLowerCase().includes(gap.toLowerCase()),
@@ -268,13 +302,13 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // Guard lines lead, then what was put back for being unsupported, then
       // the model's own account of what it did. The model's line comes last on
       // purpose: it is the only one of the three nobody verified.
-      log: [...surfaced.log, ...honest.log, ...(toolInput.log ?? [])],
-      warnings: [...surfaced.warnings, ...honest.warnings, ...(toolInput.warnings ?? [])],
+      log: [...surfaced.log, ...honest.log, ...fitted.log, ...(toolInput.log ?? [])],
+      warnings: [...surfaced.warnings, ...honest.warnings, ...fitted.warnings, ...(toolInput.warnings ?? [])],
       // The column exists and nothing has ever read it back, so the model is
       // no longer asked to produce a number for it. `pageCount` is the real
       // one, and the only one anything reads.
       estimatedPages: null,
-      pageCount,
+      pageCount: fitted.pages,
     });
 
     // Said out loud rather than done quietly: polishing regroups skills and

@@ -34,8 +34,8 @@ export interface RuleReading {
   conflictReason: string | null;
 }
 
-interface ToolResult {
-  checkKind: 'forbidden_text' | 'max_bullet_chars' | 'none';
+export interface ToolResult {
+  checkKind: 'forbidden_text' | 'max_bullet_chars' | 'max_pages' | 'none';
   terms: string[];
   limit: number;
   conflictsWith: number;
@@ -83,7 +83,7 @@ export async function readRule(
  * saying what to check, and storing either would produce a rule that either
  * never fails or always does.
  */
-function toCheck(t: ToolResult): RuleCheck | null {
+export function toCheck(t: ToolResult): RuleCheck | null {
   if (t.checkKind === 'forbidden_text') {
     const terms = (t.terms ?? []).map((x) => x.trim()).filter(Boolean).slice(0, 8);
     return terms.length ? { kind: 'forbidden_text', terms } : null;
@@ -92,6 +92,23 @@ function toCheck(t: ToolResult): RuleCheck | null {
     // A limit below about forty characters is not a rule about line length, it
     // is a misreading — and it would fail every bullet on every resume.
     return t.limit >= 40 ? { kind: 'max_bullet_chars', limit: Math.round(t.limit) } : null;
+  }
+  /*
+   * A page limit, which is the one rule that changes what the tailor DOES
+   * rather than only what the page reports.
+   *
+   * It was missing from here while everything downstream already understood it
+   * — the checker, the page, the fitting loop. So "keep it to one page" was read
+   * as guidance, saved with no check, and the resume was never cut: a feature
+   * complete at every step except the one where a person switches it on.
+   *
+   * Whole pages, and a handful at most. Zero would fail every resume there is,
+   * and a number in the dozens is a bullet length or a word count misread as a
+   * page limit — the same failure the forty-character floor above exists for.
+   */
+  if (t.checkKind === 'max_pages') {
+    const pages = Math.round(t.limit);
+    return pages >= 1 && pages <= 5 ? { kind: 'max_pages', limit: pages } : null;
   }
   return null;
 }

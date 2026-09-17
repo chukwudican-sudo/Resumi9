@@ -14,6 +14,11 @@ const bullet = (over: Partial<ResolvedBullet> = {}): ResolvedBullet => ({
   entry: 'p0',
   text: '',
   changed: true,
+  // Nothing in this file reads the ids — the honesty check compares against
+  // what the source SAID, not what the model pointed at. They are required on
+  // the type because the cut ranking follows them, so a default keeps these
+  // cases about the sentences they were written for.
+  from: [],
   evidence: [],
   moved: false,
   unsourced: false,

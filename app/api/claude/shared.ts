@@ -382,6 +382,26 @@ export function tailorToolFor({ hasSummary }: { hasSummary: boolean }): Anthropi
         items: { type: 'string' },
         description: 'Named skills, tools or qualifications the posting asks for that this resume does not show (e.g. "Docker", "C#"). This is where an unmet requirement belongs — never write one into a bullet instead. Empty array if the resume already covers everything material.',
       },
+      /**
+       * A ranking, and only a ranking.
+       *
+       * Universal rule 4 forbids the model deciding length, because when it
+       * decided it dropped whatever it liked and then misreported the result —
+       * "may run slightly over 1 page" for a resume that filled two. But
+       * something has to know which bullets matter least for THIS posting, and
+       * that judgement is the one thing here the model is genuinely better at
+       * than the app. So it ranks and the app cuts, and the app cuts only as
+       * far as the compiler says it must.
+       *
+       * Deliberately not told the page target. Handing over the number invites
+       * exactly the self-censoring rule 4 exists to stop, and a relevance
+       * ranking does not depend on how much of it gets used.
+       */
+      cutOrder: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Ids ranked least relevant to THIS posting first — the order things should go in if the resume runs longer than this person allows. Use the ids from the profile you were given. A BULLET id ("e0.b1", "p2.b0") offers that one line. An ENTRY id ("p2", "e3") offers the whole project or job, and its bullets with it. Mix them freely and rank on merit: dropping one irrelevant project is usually better for the reader than thinning three good jobs, so a weak entry belongs ABOVE bullets you would rather keep. Include entries — on a strict one-page limit, bullets alone are almost never enough, because every entry costs a heading whether or not it keeps any lines. List at least the ten things you would give up first; ranking everything is better still. This is a ranking, not a deletion: the app cuts from the front only as far as the page count says it must, always keeps at least one job however you rank them, and never touches education or skills. Never shorten the resume yourself, and never leave this empty — an unranked resume gets cut in an order nobody chose.',
+      },
       warnings: {
         type: 'array',
         items: { type: 'string' },
@@ -393,6 +413,7 @@ export function tailorToolFor({ hasSummary }: { hasSummary: boolean }): Anthropi
       'log',
       'matchScore',
       'missingRequirements',
+      'cutOrder',
       'warnings',
     ],
     additionalProperties: false,
@@ -418,9 +439,9 @@ export const RULE_INTAKE_TOOL: Anthropic.Tool = {
     properties: {
       checkKind: {
         type: 'string',
-        enum: ['forbidden_text', 'max_bullet_chars', 'none'],
+        enum: ['forbidden_text', 'max_bullet_chars', 'max_pages', 'none'],
         description:
-          'How this rule could be verified against a finished resume by a program, with no judgement. "forbidden_text" when the rule forbids specific words or names appearing anywhere — "never say spearheaded", "call it Ontario Tech not UOIT" (forbid UOIT), "do not put my GPA on anything" (forbid GPA). "max_bullet_chars" when it caps bullet length. "none" for everything else, which is most rules: anything about emphasis, ordering, tone, what to lead with, or how something should read is guidance a program cannot check. Choose "none" rather than stretching — a wrong check reports failures that are not real, and the person cannot tell why.',
+          'How this rule could be verified against a finished resume by a program, with no judgement. "forbidden_text" when the rule forbids specific words or names appearing anywhere — "never say spearheaded", "call it Ontario Tech not UOIT" (forbid UOIT), "do not put my GPA on anything" (forbid GPA). "max_bullet_chars" when it caps bullet length. "max_pages" when it caps how many pages the whole resume runs to — "keep it to one page", "never more than two pages", "one page max". "none" for everything else, which is most rules: anything about emphasis, ordering, tone, what to lead with, or how something should read is guidance a program cannot check. Choose "none" rather than stretching — a wrong check reports failures that are not real, and the person cannot tell why.',
       },
       terms: {
         type: 'array',
@@ -431,7 +452,7 @@ export const RULE_INTAKE_TOOL: Anthropic.Tool = {
       limit: {
         type: 'integer',
         description:
-          'For max_bullet_chars only: the maximum characters a single bullet may run to. One line on this resume template is roughly 110 characters; two is roughly 220. 0 for any other kind.',
+          'For max_bullet_chars: the maximum characters a single bullet may run to. One line on this resume template is roughly 110 characters; two is roughly 220. For max_pages: the maximum number of pages, as a whole number — 1 for "one page". 0 for any other kind.',
       },
       conflictsWith: {
         type: 'integer',
