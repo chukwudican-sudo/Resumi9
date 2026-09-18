@@ -309,12 +309,44 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
             </p>
           </div>
 
-          <div className="relative order-1 flex min-h-0 flex-col items-center bg-ground-band px-8 py-7 lg:order-none lg:overflow-y-auto">
+          {/*
+            The column holds still; the sheet inside it scrolls.
+
+            That split is not styling. It is what lets the wait below cover the
+            part of the resume somebody is actually looking at.
+          */}
+          <div className="relative order-1 flex min-h-0 flex-col bg-ground-band lg:order-none">
+            <div className="flex w-full flex-col items-center px-8 py-7 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+              <div className="mb-4 flex w-full max-w-[600px] items-center justify-between">
+                <span className="text-xs text-ink-muted">
+                  Version {resume.version}
+                  {!isLatest ? ' · an earlier version' : null}
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-[3px] bg-accent-wash px-2.5 py-1 text-[11.5px] text-accent">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                  ATS-safe
+                </span>
+              </div>
+              {/* The compiled document, and nothing drawn on it: this is what
+                  downloads, so a marked-up copy would stop it being a preview. */}
+              <PdfPreview applicationId={applicationId} version={resume.version} reloadKey={resume.version} />
+            </div>
+
             {/*
               An instruction rewrites the resume, so the wait sits over the
               resume. "make bullet three shorter" costs a full regeneration —
               the tool requires everything returned verbatim — so this is ten to
               thirty seconds behind a button that only said "Applying…".
+
+              It covers the COLUMN, and that is why it lives out here rather than
+              inside the scrolling part. `inset-0` on a child of a scrolling
+              element covers the first screenful of its CONTENT, not what is on
+              screen — so scrolled down to page two, this sat somewhere above the
+              viewport and the resume showed through underneath, reported as
+              "it shows half of the preview when buffering". Nothing about the
+              wait was wrong; it was measuring the wrong box.
             */}
             {editing ? (
               <div className="absolute inset-0 z-10 flex animate-[fadeIn_180ms_ease-out] items-center justify-center bg-ground-band px-8">
@@ -328,21 +360,6 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                 </div>
               </div>
             ) : null}
-            <div className="mb-4 flex w-full max-w-[600px] items-center justify-between">
-              <span className="text-xs text-ink-muted">
-                Version {resume.version}
-                {!isLatest ? ' · an earlier version' : null}
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-[3px] bg-accent-wash px-2.5 py-1 text-[11.5px] text-accent">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20 6L9 17l-5-5" />
-                </svg>
-                ATS-safe
-              </span>
-            </div>
-            {/* The compiled document, and nothing drawn on it: this is what
-                downloads, so a marked-up copy would stop it being a preview. */}
-            <PdfPreview applicationId={applicationId} version={resume.version} reloadKey={resume.version} />
           </div>
 
           <aside className="order-2 flex min-h-0 flex-col border-t border-rule bg-ground-surface lg:order-none lg:border-l lg:border-t-0">
