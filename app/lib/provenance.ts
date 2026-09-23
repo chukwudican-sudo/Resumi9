@@ -149,9 +149,12 @@ export function annotate(
  * The tailored structure with its bullets back to plain strings, and a record
  * of where each one came from.
  *
- * Tolerant of a bullet that arrives as a bare string: the schema asks for an
- * object, and a schema is a request. A bare string simply has no evidence, and
- * the honesty check treats it as what it is.
+ * Tolerant of what the model actually sends, because a schema is a request and
+ * not a guarantee. A bullet may come back carrying its id, carrying `from`, or
+ * as a bare string — and in every one of those cases, a sentence identical to
+ * one of this entry's own bullets is that bullet, unchanged. Only a sentence
+ * that answers to nothing here has no evidence, which is the state the honesty
+ * check was built to act on.
  */
 export function resolveTailored(
   raw: unknown,
@@ -167,18 +170,44 @@ export function resolveTailored(
     structure[kind] = source[kind].map((entry: any) => {
       const entryId = typeof entry?.id === 'string' ? entry.id : '';
       const resolved: string[] = [];
+      /** This entry's own bullets, for recognising one that came back verbatim. */
+      const here = [...index.bullets.values()].filter((b) => b.entry === entryId);
 
       for (const bullet of Array.isArray(entry?.bullets) ? entry.bullets : []) {
         if (typeof bullet === 'string') {
-          if (bullet.trim()) {
-            resolved.push(bullet);
-            bullets.push({ entry: entryId, text: bullet, changed: true, from: [], evidence: [], moved: false, unsourced: true });
-          }
+          const written = bullet.trim();
+          if (!written) continue;
+          /*
+           * A bare string that IS one of this entry's bullets is that bullet.
+           *
+           * The schema asks for an object and a schema is a request. A model
+           * that hands the sentence back word for word has changed nothing, and
+           * reading that as an invention is how a real resume lost a line.
+           */
+          const same = here.find((b) => b.text.trim() === written);
+          resolved.push(written);
+          bullets.push(
+            same
+              ? { entry: entryId, text: written, changed: false, from: [same.id], evidence: [same.text], moved: false, unsourced: false }
+              : { entry: entryId, text: written, changed: true, from: [], evidence: [], moved: false, unsourced: true },
+          );
           continue;
         }
 
-        const from: string[] = Array.isArray(bullet?.from) ? bullet.from.filter((f: unknown) => typeof f === 'string') : [];
-        const named = from.map((id) => index.bullets.get(id) ?? index.facts.get(id)).filter(Boolean) as {
+        /*
+         * `id` is which bullet this is; `from` names the others when one bullet
+         * merges two. Both resolve the same way — and `id` is the shape the
+         * model was shown, so it is what comes back when it has nothing to
+         * change.
+         */
+        const ids: string[] = [];
+        for (const candidate of [bullet?.id, ...(Array.isArray(bullet?.from) ? bullet.from : [])]) {
+          if (typeof candidate !== 'string') continue;
+          const id = candidate.trim();
+          if (id && !ids.includes(id)) ids.push(id);
+        }
+
+        const named = ids.map((id) => index.bullets.get(id) ?? index.facts.get(id)).filter(Boolean) as {
           text: string;
           entry: string | null;
         }[];
@@ -186,15 +215,18 @@ export function resolveTailored(
         // A fact carries the entry it was answered about; a fact with no entry
         // is about the person and belongs anywhere.
         const own = named.filter((n) => n.entry === null || n.entry === entryId);
-        const text = typeof bullet?.text === 'string' && bullet.text.trim() ? bullet.text.trim() : own[0]?.text ?? '';
+        const written = typeof bullet?.text === 'string' ? bullet.text.trim() : '';
+        const text = written || own[0]?.text || '';
         if (!text) continue;
 
         resolved.push(text);
         bullets.push({
           entry: entryId,
           text,
-          changed: Boolean(typeof bullet?.text === 'string' && bullet.text.trim()),
-          from,
+          // Sending the sentence back unchanged is not a rewrite, whether it
+          // arrived with its id, with a `from`, or as a bare string.
+          changed: Boolean(written) && !own.some((n) => n.text.trim() === written),
+          from: ids,
           evidence: own.map((n) => n.text),
           moved: named.length > own.length,
           unsourced: named.length === 0,
@@ -207,6 +239,23 @@ export function resolveTailored(
   }
 
   return { structure, bullets };
+}
+
+/**
+ * Whether a reply is in a shape we could not read at all.
+ *
+ * Not the same question as "did it invent things". A model that answers in the
+ * wrong shape produces bullets that answer to nothing — and an app that cannot
+ * tell those apart deletes the person's own sentences and tells them 26 things
+ * were invented. Every changed bullet unsourced, on a resume with more than a
+ * couple, is not a resume full of inventions; it is an answer we failed to
+ * read, and the honest response is to change nothing.
+ *
+ * A genuine rewrite carries ids, so this cannot fire on one.
+ */
+export function unreadable(bullets: ResolvedBullet[]): boolean {
+  const changed = bullets.filter((b) => b.changed);
+  return changed.length > 2 && changed.every((b) => b.unsourced);
 }
 
 /**

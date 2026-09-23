@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { annotate, cutTargets, resolveTailored } from './provenance';
+import { annotate, cutTargets, resolveTailored, unreadable } from './provenance';
 import type { ResumeStructure } from './types';
 
 const SOURCE: ResumeStructure = {
@@ -119,6 +119,109 @@ test('a fact about the person, with no entry, is evidence anywhere', () => {
   );
   assert.equal(bullets[0].moved, false);
   assert.deepEqual(bullets[0].evidence, ['Speaks French']);
+});
+
+// ── the shape the model was shown ──────────────────────────────────────────
+//
+// It is shown bullets as {id, text}. Requiring a different shape back is what
+// cost a real resume its coursework line: asked for something it could not
+// express, one model echoed all 26 bullets in the shape it had been given, none
+// resolved, and every one was deleted as an invention.
+
+test('a bullet echoed back with its id is that bullet, unchanged', () => {
+  const { structure, bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ id: 'e0.b0' }] }] },
+    indexOf(),
+  );
+  assert.deepEqual((structure.experience as any[])[0].bullets, ['Contributed to payment integration']);
+  assert.equal(bullets[0].changed, false);
+  assert.equal(bullets[0].unsourced, false);
+  assert.deepEqual(bullets[0].evidence, ['Contributed to payment integration']);
+});
+
+test('the same id with new words is a rewrite, and keeps its source', () => {
+  const { bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ id: 'e0.b0', text: 'Integrated payments end to end' }] }] },
+    indexOf(),
+  );
+  assert.equal(bullets[0].changed, true);
+  assert.deepEqual(bullets[0].evidence, ['Contributed to payment integration']);
+});
+
+test('text identical to its source is not a rewrite', () => {
+  // The model that handed everything back verbatim had changed nothing. Reading
+  // that as a rewrite is what put all 26 through the honesty check.
+  const { bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ id: 'e0.b0', text: 'Contributed to payment integration' }] }] },
+    indexOf(),
+  );
+  assert.equal(bullets[0].changed, false);
+});
+
+test('a bare string that is one of this entry\'s bullets is that bullet', () => {
+  const { bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: ['Worked across mobile and web'] }] },
+    indexOf(),
+  );
+  assert.equal(bullets[0].changed, false);
+  assert.equal(bullets[0].unsourced, false);
+  assert.deepEqual(bullets[0].evidence, ['Worked across mobile and web']);
+});
+
+test('from still names the other half of a merge', () => {
+  const { bullets } = resolveTailored(
+    {
+      experience: [
+        { id: 'e0', org: 'Droady', bullets: [{ id: 'e0.b0', from: ['e0.b1'], text: 'Shipped payments across mobile and web' }] },
+      ],
+    },
+    indexOf(),
+  );
+  assert.equal(bullets[0].changed, true);
+  assert.deepEqual(bullets[0].evidence, ['Contributed to payment integration', 'Worked across mobile and web']);
+});
+
+// ── an answer we could not read ────────────────────────────────────────────
+
+test('a reply whose every changed bullet answers to nothing is unreadable', () => {
+  const { bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: ['one', 'two', 'three'] }] },
+    indexOf(),
+  );
+  assert.equal(unreadable(bullets), true);
+});
+
+test('one sentence from nowhere among real ones is not unreadable', () => {
+  // That is an invention, which the honesty check handles. Refusing the whole
+  // edit for it would throw away work somebody wanted.
+  const { bullets } = resolveTailored(
+    {
+      experience: [
+        { id: 'e0', org: 'Droady', bullets: [{ id: 'e0.b0', text: 'Integrated payments end to end' }, 'out of nowhere'] },
+      ],
+    },
+    indexOf(),
+  );
+  assert.equal(unreadable(bullets), false);
+});
+
+test('a couple of strays is not enough to refuse a whole edit', () => {
+  const { bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: ['one', 'two'] }] },
+    indexOf(),
+  );
+  assert.equal(unreadable(bullets), false);
+});
+
+test('a resume handed back verbatim now reads as unchanged, not unreadable', () => {
+  // The real failure, in miniature: bullets echoed in the shape the model was
+  // shown. With the shapes matched they resolve, so nothing fires at all.
+  const { bullets } = resolveTailored(
+    { experience: [{ id: 'e0', org: 'Droady', bullets: [{ id: 'e0.b0' }, { id: 'e0.b1' }] }] },
+    indexOf(),
+  );
+  assert.equal(unreadable(bullets), false);
+  assert.deepEqual(bullets.map((b) => b.changed), [false, false]);
 });
 
 // ── the cut ranking ────────────────────────────────────────────────────────

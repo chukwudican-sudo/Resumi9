@@ -378,3 +378,24 @@ test('with nothing asked, the same rewrite is still caught', () => {
   );
   assert.equal(flags.length, 1);
 });
+
+test('an edit says the previous version, never your profile', () => {
+  // On an edit the source is the version on screen. Twenty-six warnings once
+  // accused somebody's own unchanged wording of not being in their profile.
+  const flags = checkBullets([bullet({ text: 'Ran the department', unsourced: true })], [], undefined, 'the previous version');
+  assert.match(flags[0].reason, /the previous version/);
+
+  const { log, warnings } = applyFlags(
+    { experience: [{ org: 'Droady', bullets: ['Ran the department'] }] },
+    flags,
+    'the previous version',
+  );
+  assert.match(log[0], /the previous version/);
+  assert.doesNotMatch(log[0], /your profile/);
+  assert.doesNotMatch(warnings[0], /your profile/);
+});
+
+test('a tailor still says your profile', () => {
+  const flags = checkBullets([bullet({ text: 'Ran the department', unsourced: true })], []);
+  assert.match(flags[0].reason, /your profile/);
+});

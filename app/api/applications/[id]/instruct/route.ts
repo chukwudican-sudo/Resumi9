@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
 import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { readInstruction } from '../../../../lib/asked';
-import { surfaceRepairs, validateTailored } from '../../../../lib/tailorGuard';
+import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
 import { requireUserId } from '../../../../server/auth';
 import {
@@ -15,7 +15,7 @@ import {
   saveResume,
 } from '../../../../server/db/repository';
 import { capacityResponse, INSTRUCT_TOOL, errorResponse, SERVICE_UNAVAILABLE } from '../../../claude/shared';
-import { annotate, resolveTailored } from '../../../../lib/provenance';
+import { annotate, resolveTailored, unreadable } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
 
 export const maxDuration = 60;
@@ -24,7 +24,10 @@ export const maxDuration = 60;
 const FREE_EDITS = 10;
 
 interface InstructResult {
-  structure: ResumeStructure;
+  /** Absent when the model asked a question instead of making the change. */
+  structure?: ResumeStructure;
+  /** One short question, when the instruction could mean two different things. */
+  question?: string;
   log: string[];
   warnings: string[];
   estimatedPages: number | null;
@@ -56,7 +59,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return errorResponse({ type: 'auth', message: 'Your API key may be invalid or out of credits.' }, 500);
   }
 
-  let body: { instruction?: unknown };
+  let body: { instruction?: unknown; question?: unknown; answer?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -73,6 +76,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       400,
     );
   }
+
+  /** The question that was put to them, and their answer, when one was asked. */
+  const question = typeof body.question === 'string' ? body.question.trim().slice(0, 500) : '';
+  const answer = typeof body.answer === 'string' ? body.answer.trim().slice(0, 500) : '';
 
   const [record, current, rules, user, spent] = await Promise.all([
     getApplication(userId, params.id),
@@ -122,7 +129,36 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * role and it has been put back", directly under their own instruction saying
    * to remove it.
    */
-  const asked = readInstruction(instruction, structure);
+  /*
+   * What the permissions read: the answer first, then the instruction it
+   * answers.
+   *
+   * `readInstruction` resolves an entry name that FOLLOWS the removal word, so
+   * "remove it completely" has to come before the "cut the Aegon job" it is
+   * answering — otherwise the name it refers to sits behind the verb and
+   * resolves to nothing. The model is shown the same two pieces laid out
+   * properly below; only this string is ordered for the matcher.
+   */
+  const asked = readInstruction(answer ? `${answer} ${instruction}` : instruction, structure);
+
+  /*
+   * The app's own question, put before anything is spent.
+   *
+   * No model call, no save, no edit consumed — `countInstructedSince` counts
+   * saved rows and this saves none. It covers the few cases the app can see for
+   * itself; the model is asked to notice the rest.
+   */
+  if (!answer && asked.ask) {
+    return NextResponse.json({ question: asked.ask, editsLeft: FREE_EDITS - spent });
+  }
+
+  const said = [
+    `The person has asked for one change: "${instruction}"`,
+    question ? `You asked them: "${question}"` : '',
+    answer ? `They answered: "${answer}"` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const content = [
     {
@@ -135,7 +171,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         JSON.stringify(annotated),
         '```',
         `Job posting — Company: ${posting?.company ?? '(not provided)'}, Role: ${posting?.role ?? '(not provided)'}\n${posting?.description ?? '(no description)'}`,
-        `The person has asked for one change: "${instruction}"`,
+        said,
         'Apply this single instruction as a surgical edit to the structure — only touch the relevant field(s), and return the full structure via the submit_resume_update tool. Do not re-tailor the entire resume from scratch, and do not improve anything you were not asked about. Never add an achievement, a number or a tool that is in neither the structure nor the instruction above — the instruction is the person\'s own account of their own work, and Rule 1 names it as evidence.',
       ].join('\n\n'),
     },
@@ -181,9 +217,39 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * emphasis. "Say I led the team" has to come back reverted, while "I used
      * Docker at Droady, add it" is the person telling it something true.
      */
+    /*
+     * A question instead of a change.
+     *
+     * Nothing is saved and no edit is spent: the person answers in the same box
+     * and the next call carries both halves. The alternative to asking is
+     * guessing, and guessing is what quietly took the first job's second bullet
+     * when somebody wrote "drop the second bullet".
+     */
+    const asking = typeof toolInput.question === 'string' ? toolInput.question.trim() : '';
+    if (asking && !toolInput.structure) {
+      return NextResponse.json({ question: asking, editsLeft: FREE_EDITS - spent });
+    }
+
     const resolved = resolveTailored(toolInput.structure, index);
-    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? [], asked);
-    const honest = applyFlags(resolved.structure, flags);
+
+    /*
+     * An answer we could not read is not an answer full of inventions.
+     *
+     * One edit came back with all 26 bullets word for word in a shape carrying
+     * no source. Every one read as invented, every one was deleted, and the
+     * section with no floor under it lost its only line. Changing nothing is
+     * the honest response, and an edit costs nothing to try again.
+     */
+    if (unreadable(resolved.bullets)) {
+      console.error('[Resumi9] Instruct came back in a shape we could not read; nothing changed.');
+      return errorResponse(
+        { type: 'generic', message: 'That came back in a shape we could not read, so nothing was changed. Try again.' },
+        502,
+      );
+    }
+
+    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? [], asked, 'the previous version');
+    const honest = applyFlags(resolved.structure, flags, 'the previous version');
 
     // The source here is the version on screen, not the profile — so the guard
     // is told to say so. "Restored from your profile, unedited" was untrue on
@@ -213,7 +279,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // match tile would go blank on every edit.
       matchScore: current.matchScore,
       missingRequirements: (current.missingRequirements as string[]) ?? [],
-      log: [`You asked: "${instruction}"`, ...surfaced.log, ...honest.log, ...(toolInput.log ?? [])],
+      log: [
+        `You asked: "${instruction}"`,
+        ...surfaced.log,
+        ...honest.log,
+        // The model's own account comes last and is the only one nobody
+        // verified — so a line claiming it removed something the guard put back
+        // does not survive to sit beside the notice saying otherwise.
+        ...withoutUndoneClaims(toolInput.log ?? [], guarded.restored),
+      ],
       warnings: [...surfaced.warnings, ...honest.warnings, ...(toolInput.warnings ?? [])],
       // Carried, not asked for. The model's guess was wrong every time it was
       // checked — "slightly over 1 page" for a resume that filled two — so the

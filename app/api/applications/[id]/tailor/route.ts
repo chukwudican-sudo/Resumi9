@@ -3,12 +3,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
 import { TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import type { ResumeStructure } from '../../../../lib/types';
-import { surfaceRepairs, validateTailored } from '../../../../lib/tailorGuard';
+import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import { requireUserId } from '../../../../server/auth';
 import { MONTHLY_CREDITS } from '../../../../lib/credits';
 import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
-import { annotate, cutTargets, resolveTailored } from '../../../../lib/provenance';
+import { annotate, cutTargets, resolveTailored, unreadable } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
@@ -191,6 +191,28 @@ export async function POST(_request: Request, { params }: { params: { id: string
      * decides whether anything was dropped.
      */
     const resolved = resolveTailored(toolInput.structure, index);
+
+    /*
+     * The same exposure as the edit path, and the same answer.
+     *
+     * A reply whose every changed bullet answers to nothing is one we failed to
+     * read. Here it would be worse than on an edit: the guard would hand back
+     * the profile's own bullets and save that as a tailored resume, for a
+     * credit.
+     */
+    if (unreadable(resolved.bullets)) {
+      await refundCredit(userId);
+      console.error('[Resumi9] Tailoring came back in a shape we could not read; refunded.');
+      return errorResponse(
+        {
+          type: 'generic',
+          message: 'That came back in a shape we could not read, so nothing was saved.',
+          creditKept: true,
+        },
+        502,
+      );
+    }
+
     const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? []);
     const honest = applyFlags(resolved.structure, flags);
     if (flags.length) {
@@ -305,7 +327,12 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // Guard lines lead, then what was put back for being unsupported, then
       // the model's own account of what it did. The model's line comes last on
       // purpose: it is the only one of the three nobody verified.
-      log: [...surfaced.log, ...honest.log, ...fitted.log, ...(toolInput.log ?? [])],
+      log: [
+        ...surfaced.log,
+        ...honest.log,
+        ...fitted.log,
+        ...withoutUndoneClaims(toolInput.log ?? [], guarded.restored),
+      ],
       warnings: [...surfaced.warnings, ...honest.warnings, ...fitted.warnings, ...(toolInput.warnings ?? [])],
       // The column exists and nothing has ever read it back, so the model is
       // no longer asked to produce a number for it. `pageCount` is the real

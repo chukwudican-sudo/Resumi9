@@ -154,6 +154,15 @@ export function checkBullets(
   bullets: ResolvedBullet[],
   requirements: string[] = [],
   asked: Asked = NOTHING_ASKED,
+  /**
+   * What the bullets are being compared against, in the person's terms.
+   *
+   * A tailor compares against the profile; an edit compares against the version
+   * on screen. Telling somebody their own unchanged sentence is "not in your
+   * profile" — which is what 26 warnings said on one edit — is both wrong and
+   * insulting.
+   */
+  sourceLabel = 'your profile',
 ): Flag[] {
   const flags: Flag[] = [];
 
@@ -186,7 +195,7 @@ export function checkBullets(
      * happens to it and what the person is told.
      */
     if (bullet.unsourced || !source.trim()) {
-      flags.push({ text: bullet.text, revertTo: '', reason: 'is not based on anything in your profile' });
+      flags.push({ text: bullet.text, revertTo: '', reason: `is not based on anything in ${sourceLabel}` });
       continue;
     }
 
@@ -229,7 +238,7 @@ export function checkBullets(
       .map((n) => n.trim())
       .find((n) => /\d/.test(n) && !evidence.includes(n.replace(/\s+/g, ' ')));
     if (invented) {
-      flags.push({ text: bullet.text, revertTo: fallback, reason: `claims "${invented}", which is not in your profile` });
+      flags.push({ text: bullet.text, revertTo: fallback, reason: `claims "${invented}", which is not in ${sourceLabel}` });
     }
   }
 
@@ -247,6 +256,7 @@ export function checkBullets(
 export function applyFlags<T extends { experience?: any[]; projects?: any[]; education?: any[] }>(
   structure: T,
   flags: Flag[],
+  sourceLabel = 'your profile',
 ): { structure: T; log: string[]; warnings: string[] } {
   if (!flags.length) return { structure, log: [], warnings: [] };
 
@@ -271,7 +281,7 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
   const removed = flags.length - reverted;
   const log: string[] = [];
   if (reverted) log.push(`Put ${reverted} ${reverted === 1 ? 'bullet' : 'bullets'} back in your own words — the rewrite had added something your profile does not say.`);
-  if (removed) log.push(`Removed ${removed} ${removed === 1 ? 'bullet' : 'bullets'} that ${removed === 1 ? 'was' : 'were'} not based on anything in your profile.`);
+  if (removed) log.push(`Removed ${removed} ${removed === 1 ? 'bullet' : 'bullets'} that ${removed === 1 ? 'was' : 'were'} not based on anything in ${sourceLabel}.`);
 
   return {
     structure: fixed,

@@ -175,3 +175,63 @@ test('nothing asked grants nothing', () => {
 test('the instruction is kept verbatim, for the honesty check to read', () => {
   assert.equal(asked('  add that I used C# at Droady  ').words, 'add that I used C# at Droady');
 });
+
+// ── asking instead of guessing ─────────────────────────────────────────────
+//
+// "Drop the second bullet" silently took Droady's, because Droady happened to
+// be first. The app could see it did not know; it picked anyway.
+
+test('a removal aimed at a part, with nothing named, asks which one', () => {
+  const question = asked('drop the second bullet').ask;
+  assert.ok(question, 'it should ask rather than pick');
+  assert.match(question!, /Which one\?/);
+  assert.match(question!, /Droady/);
+  assert.match(question!, /Aegon/);
+});
+
+test('the same instruction with an entry named asks nothing', () => {
+  assert.equal(asked('remove the second bullet from Droady').ask, null);
+});
+
+test('a word meaning both delete and shorten asks which was meant', () => {
+  const question = asked('cut the Aegon job').ask;
+  assert.ok(question);
+  assert.match(question!, /Aegon/);
+  assert.match(question!, /removed completely, or just shortened/);
+});
+
+test('the same word aimed at bullets is not ambiguous', () => {
+  // "Cut the Aegon bullets" is a length request and always was.
+  assert.equal(asked('cut the Aegon bullets').ask, null);
+});
+
+test('two entries answering the same words asks which', () => {
+  const twins: ResumeStructure = {
+    ...RESUME,
+    projects: [
+      { name: 'MealApp', tech: 'React Native', dates: 'May 2026', bullets: ['x'] },
+      { name: 'MealApp Pro', tech: 'Swift', dates: 'Jun 2026', bullets: ['y'] },
+    ],
+  };
+  const question = readInstruction('remove the MealApp project', twins).ask;
+  assert.ok(question);
+  assert.match(question!, /MealApp or MealApp Pro/);
+});
+
+test('an instruction it can act on asks nothing', () => {
+  assert.equal(asked('remove the Aegon job').ask, null);
+  assert.equal(asked('shorten the Aegon bullets').ask, null);
+  assert.equal(asked('add that I used C# at Droady').ask, null);
+  assert.equal(asked('take Python out of my skills').ask, null);
+});
+
+test('a job that ended is not offered a delete-or-shorten choice', () => {
+  // "No longer at WesternBell" means the dates changed. Asking whether to
+  // delete it would be offering the wrong two answers.
+  assert.equal(asked('no longer at WesternBell').ask, null);
+});
+
+test('a question or a refusal asks nothing back', () => {
+  assert.equal(asked('why did you cut the Aegon job?').ask, null);
+  assert.equal(asked("don't cut the Aegon job").ask, null);
+});

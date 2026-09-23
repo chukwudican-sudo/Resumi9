@@ -231,14 +231,23 @@ export const EXTRA_SECTIONS_SCHEMA = {
  * record being built to catch.
  */
 /**
- * A tailored bullet: what it now says, and which bullets it came from.
+ * A tailored bullet: which bullet it is, and what it now says.
  *
- * `from` is the whole point. Three revisions of the prompt could not stop a
- * faithful rewrite growing a clause nobody earned — "…, working both
- * independently and collaboratively" on a bullet about a 3-person team, "…,
- * using Git-based version control throughout" on a bullet about a CI pipeline.
- * Naming the source makes the claim checkable in code instead of arguable in
- * prose.
+ * Knowing where a sentence came from is the whole point. Three revisions of the
+ * prompt could not stop a faithful rewrite growing a clause nobody earned — "…,
+ * working both independently and collaboratively" on a bullet about a 3-person
+ * team, "…, using Git-based version control throughout" on a bullet about a CI
+ * pipeline. Naming the source makes the claim checkable in code instead of
+ * arguable in prose.
+ *
+ * **It is `id`, and that is the fix for a bullet somebody lost.** This used to
+ * require `from`, an array, while the profile was SHOWN to the model as
+ * `{id, text}`. Given a request it could not express — "move the summary below
+ * education" — one model echoed all 26 bullets back in the shape it had been
+ * shown. Not one resolved, all 26 read as inventions, all 26 were deleted, and
+ * the entry with no floor under it lost its only line for good. The two shapes
+ * are now the same shape, so echoing what you were given is a correct answer
+ * rather than a catastrophe.
  *
  * `text` is optional, and leaving it out is the normal answer for a bullet that
  * did not need changing. It also pays for the check: output tokens are the
@@ -247,19 +256,24 @@ export const EXTRA_SECTIONS_SCHEMA = {
 const TAILORED_BULLET = {
   type: 'object' as const,
   properties: {
-    from: {
-      type: 'array' as const,
-      items: { type: 'string' as const },
+    id: {
+      type: 'string' as const,
       description:
-        'The id or ids this bullet is a rewrite of, copied from the profile you were given — a bullet id like "e0.b1", or a fact id like "f3". Every bullet must name at least one, and they must belong to THIS entry: a bullet built from another entry\'s work is that work moved, which is not allowed. Facts with no entry of their own may be used anywhere.',
+        'Which bullet this is — the id you were shown, returned unchanged: "e0.b1", "p2.b0". This is the same shape you were given, so a bullet you are leaving alone can be sent back exactly as it arrived.',
     },
     text: {
       type: 'string' as const,
       description:
         'The rewritten bullet. Leave it out entirely when the bullet is right as it stands — that is the normal answer for a bullet already written in this posting\'s terms, and it costs nothing to send.',
     },
+    from: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+      description:
+        'Only when one bullet merges two of theirs: the other ids it draws on, beside its own. They must belong to THIS entry — a bullet built from another entry\'s work is that work moved, which is not allowed — except a fact id like "f3", which may be used anywhere. Leave it out for an ordinary rewrite.',
+    },
   },
-  required: ['from'],
+  required: ['id'],
   additionalProperties: false as const,
 };
 
@@ -529,12 +543,27 @@ export const SOURCE_EXTRACTION_TOOL: Anthropic.Tool = {
   },
 };
 
+/**
+ * An edit, or one question instead of one.
+ *
+ * `structure` is no longer required, and that is deliberate: the alternative to
+ * asking is guessing, and guessing is what silently took the first job's second
+ * bullet when somebody wrote "drop the second bullet". A reply carrying neither
+ * a structure nor a question is malformed rather than a question, and the route
+ * treats it as unreadable and changes nothing.
+ */
 export const INSTRUCT_TOOL: Anthropic.Tool = {
   name: 'submit_resume_update',
-  description: 'Submit the surgically updated ResumeStructure after acting on a single mid-session instruction.',
+  description:
+    'Submit the surgically updated ResumeStructure after acting on a single mid-session instruction — or, when the instruction could mean two genuinely different things, one short question instead.',
   input_schema: {
     type: 'object',
     properties: {
+      question: {
+        type: 'string',
+        description:
+          'Ask instead of acting, and leave "structure" out entirely when you do. Use this ONLY when the instruction could mean two genuinely different changes to different parts of this resume — "drop the second bullet" when there are six entries it could belong to. Do NOT ask because something could have been said more precisely, or to confirm a change you understood: a question nobody needed is worse than no question. One short question, in their own words, never more than one.',
+      },
       structure: {
         // The same narrow shape the tailor returns. This asked for the whole
         // resume — name, contact, degrees, links — and the guard overwrote all
@@ -554,7 +583,10 @@ export const INSTRUCT_TOOL: Anthropic.Tool = {
         description: 'Anything the person should check before sending. Empty array if none. Say nothing about length — the app measures the real page count itself.',
       },
     },
-    required: ['structure', 'log', 'warnings'],
+    // `structure` is absent here on purpose — see the note above. `log` and
+    // `warnings` stay required so an answer always says what it did, even if
+    // what it did was ask.
+    required: ['log', 'warnings'],
     additionalProperties: false,
   },
 };

@@ -44,6 +44,24 @@ export interface Asked {
   allowsDates(name: string, returned: string | null | undefined): boolean;
   readonly wantsSummary: boolean;
   readonly dropsSummary: boolean;
+  /**
+   * They worded a removal of some kind, anywhere in the instruction.
+   *
+   * Coarse on purpose, and used for one thing: whether the app may leave an
+   * entry with no bullets. Forcing bullets back is right when the model emptied
+   * something on its own and wrong when somebody asked for it — and "remove the
+   * coursework line" names no entry, so nothing finer would catch it.
+   */
+  readonly askedForRemoval: boolean;
+  /**
+   * A question to put to the person before anything is done, or null.
+   *
+   * The app guessed where it should have asked: "drop the second bullet"
+   * silently took Droady's, because Droady happened to be first. Asking costs
+   * nothing here — no model call, no edit, no wait — so where the app can see
+   * the ambiguity itself, it says so instead of picking.
+   */
+  readonly ask: string | null;
 }
 
 /**
@@ -58,6 +76,15 @@ const REMOVAL =
 
 /** Wording that might be a removal. Enough to ask about, never enough to act. */
 const MAYBE = /\b(cut|cutting|lose|losing|ditch|ditching|without|no longer)\b/i;
+
+/**
+ * The half of MAYBE that is worth a question.
+ *
+ * "Cut the Aegon job" means two things and deserves asking. "No longer at
+ * WesternBell" means the job ended — asking whether to delete it would be
+ * offering the wrong two answers, and "without" is usually about wording.
+ */
+const MEANS_BOTH = /\b(cut|cutting|lose|losing|ditch|ditching)\b/i;
 
 /** Anything that turns the sentence into a refusal or a question about one. */
 const NEGATION = /\b(don'?t|do not|never|instead of|rather than|avoid|stop|not)\b/i;
@@ -175,26 +202,55 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
    * Education is never granted here. A degree is not something an edit to one
    * application should remove; the profile is where it lives.
    */
+  /** Every entry this instruction names, wherever in the sentence it sits. */
+  const named: { at: number; grant: Grant }[] = [];
+  for (const kind of ['experience', 'projects'] as EntryKind[]) {
+    for (const entry of source[kind] ?? []) {
+      const name = kind === 'experience' ? (entry as { org: string }).org : (entry as { name: string }).name;
+      const at = whereNamed(words, name);
+      if (at >= 0) named.push({ at, grant: { kind, name } });
+    }
+  }
+
   let grant: Grant | null = null;
+  let tied: string[] = [];
   if (removal && !refused && !aboutParts) {
     const wanted: EntryKind[] = kindsNamed.length
       ? kindsNamed.filter((kind) => kind !== 'education')
       : ['experience', 'projects'];
 
-    const found: { at: number; grant: Grant }[] = [];
-    for (const kind of wanted) {
-      if (kind === 'education') continue;
-      for (const entry of source[kind] ?? []) {
-        const name = kind === 'experience' ? (entry as { org: string }).org : (entry as { name: string }).name;
-        const at = whereNamed(words, name);
-        if (at > removal.index) found.push({ at, grant: { kind, name } });
-      }
-    }
+    const after = named
+      .filter((n) => n.at > removal.index && wanted.includes(n.grant.kind))
+      .sort((a, b) => a.at - b.at);
+    const nearest = after[0];
+    const sharing = after.filter((f) => f.at === nearest?.at);
+    if (nearest && sharing.length === 1) grant = nearest.grant;
+    else if (sharing.length > 1) tied = sharing.map((f) => f.grant.name);
+  }
 
-    found.sort((a, b) => a.at - b.at);
-    const nearest = found[0];
-    const tied = found.filter((f) => f.at === nearest?.at);
-    if (nearest && tied.length === 1) grant = nearest.grant;
+  /*
+   * What to ask, when the app can see the ambiguity for itself.
+   *
+   * Three cases, and only three: a removal aimed at a part of something with no
+   * entry named at all; a word that means both delete and shorten; and two
+   * entries answering the same words. Anything vaguer than this the model will
+   * be asked to notice — a word list cannot cover how many ways people are
+   * vague, and a question nobody needed is worse than no question.
+   */
+  const everything = [
+    ...(source.experience ?? []).map((e) => e.org),
+    ...(source.projects ?? []).map((p) => p.name),
+  ].filter((name) => typeof name === 'string' && name.trim());
+
+  let ask: string | null = null;
+  if (!refused && !grant) {
+    if (tied.length > 1) {
+      ask = `Which one — ${listOf(tied, 'or')}?`;
+    } else if (removal && aboutParts && named.length === 0 && everything.length > 1) {
+      ask = `Which one? You have ${listOf(everything.slice(0, 6))}.`;
+    } else if (!removal && MEANS_BOTH.test(words) && !aboutParts && named.length === 1) {
+      ask = `Do you want ${named[0].grant.name} removed completely, or just shortened?`;
+    }
   }
 
   /** Skills are looser: the whole blast radius is one word in a comma list. */
@@ -247,7 +303,15 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
 
     wantsSummary,
     dropsSummary,
+    askedForRemoval: Boolean(removal) && !refused,
+    ask,
   };
+}
+
+/** "a, b and c" — for putting a person's own entry names back to them. */
+function listOf(names: string[], joiner = 'and'): string {
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} ${joiner} ${names[names.length - 1]}`;
 }
 
 /** The month named in the text, 1-12, or 0. */
@@ -289,4 +353,6 @@ export const NOTHING_ASKED: Asked = {
   allowsDates: () => false,
   wantsSummary: false,
   dropsSummary: false,
+  askedForRemoval: false,
+  ask: null,
 };

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { ResumeStructure, ResumeWarning } from '../../lib/types';
+import type { ResumeStructure } from '../../lib/types';
 import DownloadPdf from './DownloadPdf';
 import Stages from '../Stages';
 import { INSTRUCT_STEPS, REASSURE } from '../../lib/waits';
@@ -49,8 +49,7 @@ interface Props {
     matchScore: number | null;
     missingRequirements: string[];
     log: string[];
-    /** Sentences, some carrying the instruction that would answer them. */
-    warnings: ResumeWarning[];
+    warnings: string[];
     version: number;
   } | null;
   versions: ResumeVersion[];
@@ -71,18 +70,33 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
   const [instruction, setInstruction] = useState('');
   const composer = useRef<HTMLTextAreaElement>(null);
   const [editing, setEditing] = useState(false);
+  /**
+   * A question put to the person, and the instruction it is about.
+   *
+   * Held here rather than saved, because nothing happened: no version, no edit
+   * spent. The next request carries both halves so the answer is read against
+   * what it answers.
+   */
+  const [asking, setAsking] = useState<{ instruction: string; question: string } | null>(null);
   const [editsLeft, setEditsLeft] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
 
   async function applyInstruction() {
-    if (!instruction.trim() || editing) return;
+    const typed = instruction.trim();
+    if (!typed || editing) return;
     setEditing(true);
     setError(null);
     try {
       const response = await fetch(`/api/applications/${applicationId}/instruct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction: instruction.trim() }),
+        // Answering carries the question and the instruction it was about, so
+        // the answer is read against what it answers rather than on its own.
+        body: JSON.stringify(
+          asking
+            ? { instruction: asking.instruction, question: asking.question, answer: typed }
+            : { instruction: typed },
+        ),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -90,6 +104,21 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
         return;
       }
       setEditsLeft(typeof data?.editsLeft === 'number' ? data.editsLeft : null);
+
+      /*
+       * A question, not a change.
+       *
+       * Nothing was saved, so nothing is refreshed and no edit was spent. The
+       * box becomes the place to answer, and the original instruction is kept —
+       * a second question about the same instruction still answers the first.
+       */
+      if (typeof data?.question === 'string' && data.question.trim()) {
+        setAsking({ instruction: asking?.instruction ?? typed, question: data.question.trim() });
+        setInstruction('');
+        return;
+      }
+
+      setAsking(null);
       setInstruction('');
       // Inside the transition, so the spinner outlasts the request and a second
       // click cannot land on a screen that has not caught up yet.
@@ -168,7 +197,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
    * and only then.
    */
   async function leave() {
-    if (instruction.trim()) {
+    if (instruction.trim() || asking) {
       const discard = await ask({
         title: 'Leave without applying?',
         body: 'The change you typed has not been applied to this resume yet.',
@@ -567,33 +596,9 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                   {resume.warnings.length > 0 ? (
                     <div className="flex flex-col gap-2 rounded-md border border-flag-line bg-flag-bg p-4">
                       <span className="text-[11px] uppercase tracking-[0.12em] text-flag">Worth checking</span>
-                      {resume.warnings.map((w, i) => {
-                        const text = typeof w === 'string' ? w : w.text;
-                        const retry = typeof w === 'string' ? null : w.retry;
-                        return (
-                          <span key={i} className="text-[13px] leading-snug text-flag-ink">
-                            {text}
-                            {/*
-                              A refusal somebody can answer without retyping it.
-                              The guard put something back because the wording
-                              meant two things; this is the wording that does not.
-                            */}
-                            {retry ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setInstruction(retry);
-                                  composer.current?.scrollIntoView({ block: 'nearest' });
-                                  composer.current?.focus();
-                                }}
-                                className="mt-1.5 block text-[12px] text-accent transition hover:text-accent-hover"
-                              >
-                                Yes &mdash; {retry}
-                              </button>
-                            ) : null}
-                          </span>
-                        );
-                      })}
+                      {resume.warnings.map((w, i) => (
+                        <span key={i} className="text-[13px] leading-snug text-flag-ink">{w}</span>
+                      ))}
                     </div>
                   ) : null}
 
@@ -628,12 +633,36 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                   <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">
                     Change something
                   </span>
+
+                  {/*
+                    Asked rather than guessed. "Drop the second bullet" used to
+                    take the first job's, silently, because it was first.
+                  */}
+                  {asking ? (
+                    <div className="flex flex-col gap-1.5 rounded border border-accent-line bg-ground-surface px-3 py-2.5">
+                      <span className="text-[13px] leading-snug text-ink">{asking.question}</span>
+                      <span className="text-[12px] leading-snug text-ink-muted">
+                        About &ldquo;{asking.instruction}&rdquo;
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAsking(null);
+                          setInstruction(asking.instruction);
+                        }}
+                        className="self-start text-[12px] text-accent transition hover:text-accent-hover"
+                      >
+                        Start over
+                      </button>
+                    </div>
+                  ) : null}
+
                   <textarea
                     rows={2}
                     value={instruction}
                     onChange={(e) => setInstruction(e.target.value)}
                     disabled={editing || busy}
-                    placeholder="Make the FraudWatch bullets shorter…"
+                    placeholder={asking ? 'Your answer…' : 'Make the FraudWatch bullets shorter…'}
                     className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-rule-field bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
                   />
                   <div className="flex flex-wrap gap-1.5">
@@ -667,7 +696,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                       disabled={editing || busy || !instruction.trim()}
                       className="rounded bg-accent px-4 py-2 text-[13px] font-medium text-ground transition hover:bg-accent-hover disabled:pointer-events-none disabled:bg-rule-field disabled:text-ink-ghost"
                     >
-                      {editing ? 'Applying…' : 'Apply'}
+                      {editing ? 'Applying…' : asking ? 'Answer' : 'Apply'}
                     </button>
                   </div>
                 </div>

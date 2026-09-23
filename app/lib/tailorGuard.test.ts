@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readInstruction } from './asked';
-import { normaliseTailored, surfaceRepairs, validateTailored } from './tailorGuard';
+import { normaliseTailored, surfaceRepairs, validateTailored, withoutUndoneClaims } from './tailorGuard';
 import type { ResumeStructure } from './types';
 
 /**
@@ -299,12 +299,7 @@ test('a warning leads the log rather than trailing it', () => {
   const { warnings, log } = surfaceRepairs(repairs);
   assert.ok(warnings.length >= 1);
   assert.ok(log.length >= 1);
-  for (const warning of warnings) {
-    // A warning is either a sentence or a sentence with the instruction that
-    // answers it. Both read as sentences on the page.
-    const line = typeof warning === 'string' ? warning : warning.text;
-    assert.ok(line.trim().endsWith('.'), `not a sentence: ${line}`);
-  }
+  for (const line of warnings) assert.ok(line.trim().endsWith('.'), `not a sentence: ${line}`);
 });
 
 // ── Nothing appears that was not already there ─────────────────────────────
@@ -484,19 +479,20 @@ test('the same drop, with nothing asked, is still put back', () => {
   assert.deepEqual(orgs(structure), ['Droady', 'Aegon', 'WesternBell']);
 });
 
-test('a removal worded two ways comes back with the words that would work', () => {
-  // "Cut" means delete and means shorten. Restoring and saying so costs one
-  // free edit; guessing wrong takes a job off a resume somebody then sends.
+test('a removal worded two ways is put back, and says what would have worked', () => {
+  // A backstop now: "cut the Aegon job" is put to the person as a question
+  // before anything runs. This is the path for a removal nobody queried.
   const tailored = clone();
   tailored.experience = tailored.experience.filter((e) => e.org !== 'Aegon');
 
-  const { repairs } = validateTailored(SOURCE, tailored, edit('cut the Aegon job'));
-  const { warnings } = surfaceRepairs(repairs);
-  const answerable = warnings.find((w) => typeof w !== 'string');
+  const { structure, repairs } = validateTailored(SOURCE, tailored, edit('cut the Aegon job'));
+  assert.deepEqual(orgs(structure), ['Droady', 'Aegon', 'WesternBell']);
 
-  assert.ok(answerable && typeof answerable !== 'string', 'the refusal carries its own answer');
-  assert.equal(answerable.retry, 'remove the Aegon job');
-  assert.match(answerable.text, /not clearly enough to act on/);
+  const { warnings } = surfaceRepairs(repairs);
+  assert.ok(
+    warnings.some((w) => /not clearly enough to act on/.test(w) && /Remove the Aegon job/.test(w)),
+    warnings.join(' | '),
+  );
 });
 
 test('a skill the person asked to lose stays lost', () => {
@@ -542,4 +538,46 @@ test('a one-job resume plus "remove that job" is not a failed edit', () => {
   });
   assert.equal(unusable, false);
   assert.deepEqual(orgs(structure), []);
+});
+
+test('an emptied education entry keeps its bullets, like the other two', () => {
+  // It did not, and that is what cost a real coursework line when every bullet
+  // on the resume was deleted at once.
+  const tailored = clone();
+  tailored.education[0].bullets = [];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.deepEqual(structure.education[0].bullets, ['Relevant coursework: Data Structures']);
+});
+
+test('education lets go when the person asked for a removal', () => {
+  // Blanket protection is the mistake that stopped "remove the Aegon job"
+  // working. "Remove the coursework line" names no entry, so nothing finer
+  // would catch it.
+  const tailored = clone();
+  tailored.education[0].bullets = [];
+  const { structure } = validateTailored(SOURCE, tailored, edit('remove the coursework line'));
+  assert.deepEqual(structure.education[0].bullets, []);
+});
+
+test('the model cannot claim it removed something the guard put back', () => {
+  // One screen said "Removed the Aegon entry as instructed" on the left while
+  // the right said it had been put back. Both sentences, one of them false.
+  const kept = withoutUndoneClaims(
+    [
+      'Removed the Aegon (Wealth Manager) entry from Experience as instructed; no other content changed.',
+      'Reordered the projects to lead with FraudWatch.',
+    ],
+    ['Aegon'],
+  );
+  assert.deepEqual(kept, ['Reordered the projects to lead with FraudWatch.']);
+});
+
+test('a line about something that really went is left alone', () => {
+  const kept = withoutUndoneClaims(['Removed the Aegon entry as instructed.'], ['WesternBell']);
+  assert.equal(kept.length, 1);
+});
+
+test('nothing restored means nothing dropped from the log', () => {
+  const lines = ['Removed the Aegon entry.', 'Tightened two bullets.'];
+  assert.deepEqual(withoutUndoneClaims(lines, []), lines);
 });

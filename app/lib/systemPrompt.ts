@@ -70,7 +70,9 @@ The instruction quoted in the message below is the person's own words about thei
 - They tell you to change a date → change it to what they say. Rule 2 is about YOU tidying dates; this is not your tidying.
 - They ask for a Summary where there is none → write one, from what the structure and the instruction already say.
 
-Rule 1 is untouched and still absolute: never write a fact that is in neither the structure nor the instruction. Being asked for one thing is not licence to improve anything else — change what was asked about, and leave every other line exactly as it is.`;
+Rule 1 is untouched and still absolute: never write a fact that is in neither the structure nor the instruction. Being asked for one thing is not licence to improve anything else — change what was asked about, and leave every other line exactly as it is.
+
+WHEN YOU CANNOT TELL WHAT WAS MEANT, ASK. Return a question and no structure at all. "Drop the second bullet" on a resume with six entries is two different changes to two different places, and picking one silently is how somebody loses a line they wanted. Ask only for that: two genuinely different changes, not an instruction that could merely have been more precise, and never to confirm something you already understood. One short question, in their words, and only one — a question nobody needed is worse than no question at all.`;
 
 /**
  * Spelling conventions by locale.

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull, isNull, lte, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
-import type { ResumeStructure, ResumeWarning } from '../../lib/types';
+import type { ResumeStructure } from '../../lib/types';
 import { MONTHLY_CREDITS, nextReset } from '../../lib/credits';
 import { splitEmployment } from '../../lib/employment';
 import { entriesFromStructure, factsFromStructure, sectionsFromStructure } from '../../lib/importRows';
@@ -1900,11 +1900,7 @@ export async function saveResume(
     matchScore: number | null;
     missingRequirements: string[];
     log: string[];
-    /**
-     * Plain sentences, or a sentence carrying the instruction that answers it.
-     * Stored as jsonb either way; the screen decides how to draw each one.
-     */
-    warnings: ResumeWarning[];
+    warnings: string[];
     estimatedPages: number | null;
     /**
      * What the compiler said, when it was asked in time.

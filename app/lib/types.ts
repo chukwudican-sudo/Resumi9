@@ -10,17 +10,6 @@ export interface TokenUsage {
 
 export type ApiErrorType = 'network' | 'auth' | 'generic' | 'timeout';
 
-/**
- * One line of "Worth checking" on a finished resume.
- *
- * A plain sentence, or a sentence with the instruction that answers it. The
- * second shape exists for a refusal somebody can act on: the guard put an entry
- * back because "cut the Aegon job" means two things, and the words that would
- * work ride along so the screen can offer them as a button rather than making
- * somebody guess at the phrasing.
- */
-export type ResumeWarning = string | { text: string; retry: string };
-
 export interface ApiErrorPayload {
   type: ApiErrorType;
   message: string;

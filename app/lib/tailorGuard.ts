@@ -1,7 +1,7 @@
 import { NOTHING_ASKED, type Asked } from './asked';
 import { parseDates } from './entryFormat';
 import { patternFor, waysOfWriting } from './requirementMatch';
-import type { ResumeStructure, ResumeWarning } from './types';
+import type { ResumeStructure } from './types';
 
 /**
  * What the tailoring pass is not allowed to quietly take away.
@@ -57,8 +57,6 @@ export interface Repair {
   message: string;
   /** The same event in the change log's voice. */
   logLine: string;
-  /** An instruction to offer as a button, for a refusal they can answer. */
-  retry?: string;
 }
 
 export interface TailorGuardResult {
@@ -76,6 +74,15 @@ export interface TailorGuardResult {
    * a credit spent. The caller refunds and says so instead.
    */
   unusable: boolean;
+  /**
+   * Entries the guard put back, by the name they answer to.
+   *
+   * So the model's own account can be checked against what actually happened.
+   * One screen said "Removed the Aegon entry as instructed" on the left while
+   * the right said it had been put back — the log is the only one of the two
+   * nobody verifies.
+   */
+  restored: string[];
 }
 
 // ── comparing ──────────────────────────────────────────────────────────────
@@ -335,9 +342,17 @@ function keepBullets(
   what: string,
   repairs: Repair[],
   from: string,
+  /**
+   * Whether an empty entry is allowed to stay empty.
+   *
+   * True when the person worded a removal. Blanket protection is the mistake
+   * that stopped "remove the Aegon job" working, and it would stop "remove the
+   * coursework line" the same way.
+   */
+  allowEmpty: boolean,
 ): string[] {
   const kept = asList<string>(tailored).filter((b) => typeof b === 'string' && b.trim());
-  if (kept.length > 0 || source.length === 0) return kept;
+  if (kept.length > 0 || source.length === 0 || allowEmpty) return kept;
   repairs.push({
     kind: 'bullets',
     message: `${what} came back with no bullet points at all, so the ones from ${from} were kept. Trim them yourself if the resume runs long.`,
@@ -385,17 +400,16 @@ export function validateTailored(
   const asAsked = (logLine: string): Repair => ({ kind: 'asked', message: logLine, logLine });
 
   /**
-   * A refusal the person can answer.
+   * A refusal that says what would have worked.
    *
-   * They worded a removal — "cut the Aegon job" — and the wording means two
-   * things, so it was put back rather than acted on. The words that would work
-   * ride along as `retry`, which the screen offers as a button.
+   * A backstop now rather than the main path: a wording that means two things
+   * is put to the person as a question before anything runs. This is what
+   * catches a removal neither the app nor the model queried.
    */
   const unclear = (name: string, noun: string): Repair => ({
     kind: 'unclear',
     message: `You asked for ${name} to go, but not clearly enough to act on, so it was put back. "Remove the ${name} ${noun}" will do it.`,
     logLine: `${name}: put back — the instruction read as a removal but was not clear enough to act on.`,
-    retry: `remove the ${name} ${noun}`,
   });
 
   // ── experience ──
@@ -441,7 +455,7 @@ export function validateTailored(
       fixed.title = src.title;
     }
 
-    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from);
+    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from, asked.askedForRemoval);
     return fixed;
   });
 
@@ -486,7 +500,7 @@ export function validateTailored(
     // The schema asks for the link to come back untouched. Asking is not
     // enforcing, and a link is not something tailoring has an opinion about.
     fixed.url = src.url;
-    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from);
+    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from, asked.askedForRemoval);
     return fixed;
   });
 
@@ -539,6 +553,15 @@ export function validateTailored(
     // A degree is a credential, not a pitch. There is no job-specific better
     // way to say "Bachelor of Engineering in Software Engineering".
     fixed.degree = src.degree;
+    /*
+     * Education gets the floor the other two always had.
+     *
+     * It did not, and that is what cost a real coursework line: every bullet on
+     * the resume was deleted at once, experience and projects were handed back
+     * theirs, and education — the one section with nothing underneath it — kept
+     * the emptiness.
+     */
+    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from, asked.askedForRemoval);
     return fixed;
   });
 
@@ -698,8 +721,15 @@ export function validateTailored(
     });
   }
 
+  const restored = [
+    ...jobs.missing.map((job) => job.org),
+    ...projects.missing.map((project) => project.name),
+    ...schools.missing.map((school) => school.school),
+  ].filter((name): name is string => typeof name === 'string' && Boolean(name.trim()));
+
   return {
     repairs,
+    restored,
     /*
      * Not one entry answered to anything in the source.
      *
@@ -749,13 +779,29 @@ export function validateTailored(
  * Guard lines lead the log. The point of a restore notice is lost at item
  * fourteen of sixteen.
  */
-export function surfaceRepairs(repairs: Repair[]): { warnings: ResumeWarning[]; log: string[] } {
+/**
+ * The model's own account, minus the parts of it that did not happen.
+ *
+ * It writes the change log, and nothing checked it: one edit logged "Removed
+ * the Aegon (Wealth Manager) entry from Experience as instructed" beside a
+ * panel saying the entry had been put back. Both sentences on one screen, one
+ * of them false. A line claiming a removal of something that was restored is
+ * dropped — the restore notice beside it already says what happened.
+ */
+export function withoutUndoneClaims(lines: string[], restored: string[]): string[] {
+  const names = restored.filter((name) => name.trim());
+  if (!names.length) return lines;
+  return lines.filter((line) => {
+    if (!/\b(remov\w*|delet\w*|dropp?\w*|cut|excluded|omitted)\b/i.test(line)) return true;
+    return !names.some((name) => patternFor(name).test(line));
+  });
+}
+
+export function surfaceRepairs(repairs: Repair[]): { warnings: string[]; log: string[] } {
   return {
     // `asked` joins `skill` in the log only: the guard standing down because
     // somebody asked it to is not something to check before sending.
-    warnings: repairs
-      .filter((r) => r.kind !== 'skill' && r.kind !== 'asked')
-      .map((r) => (r.retry ? { text: r.message, retry: r.retry } : r.message)),
+    warnings: repairs.filter((r) => r.kind !== 'skill' && r.kind !== 'asked').map((r) => r.message),
     log: repairs.map((r) => r.logLine),
   };
 }
