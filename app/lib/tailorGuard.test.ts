@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readInstruction } from './asked';
 import { normaliseTailored, surfaceRepairs, validateTailored } from './tailorGuard';
 import type { ResumeStructure } from './types';
 
@@ -298,7 +299,12 @@ test('a warning leads the log rather than trailing it', () => {
   const { warnings, log } = surfaceRepairs(repairs);
   assert.ok(warnings.length >= 1);
   assert.ok(log.length >= 1);
-  for (const line of warnings) assert.ok(line.trim().endsWith('.'), `not a sentence: ${line}`);
+  for (const warning of warnings) {
+    // A warning is either a sentence or a sentence with the instruction that
+    // answers it. Both read as sentences on the page.
+    const line = typeof warning === 'string' ? warning : warning.text;
+    assert.ok(line.trim().endsWith('.'), `not a sentence: ${line}`);
+  }
 });
 
 // ── Nothing appears that was not already there ─────────────────────────────
@@ -448,4 +454,92 @@ test('an edit restores from the previous version, and says so', () => {
 test('a tailor still restores from your profile by default', () => {
   const tailored = validateTailored(SOURCE, { ...clone(), projects: [] });
   assert.match(tailored.repairs.find((r) => r.kind === 'entry')!.logLine, /your profile/);
+});
+
+// ── what the person asked for ──────────────────────────────────────────────
+//
+// The guard was built against a model that drops things on its own. Told to
+// remove the Aegon job, it put the job straight back and blamed the tailoring
+// for the loss — on a screen quoting the instruction directly above it.
+
+const asking = (words: string) => readInstruction(words, SOURCE);
+const edit = (words: string) => ({ sourceLabel: 'the previous version', asked: asking(words) });
+
+test('a job the person asked to remove stays removed', () => {
+  const tailored = clone();
+  tailored.experience = tailored.experience.filter((e) => e.org !== 'Aegon');
+
+  const { structure, repairs } = validateTailored(SOURCE, tailored, edit('remove the Aegon job'));
+  assert.deepEqual(orgs(structure), ['Droady', 'WesternBell']);
+
+  const { warnings, log } = surfaceRepairs(repairs);
+  assert.deepEqual(warnings, [], 'doing what was asked is not something to check before sending');
+  assert.ok(log.some((line) => /Aegon.*removed, as you asked/.test(line)), log.join(' | '));
+});
+
+test('the same drop, with nothing asked, is still put back', () => {
+  const tailored = clone();
+  tailored.experience = tailored.experience.filter((e) => e.org !== 'Aegon');
+  const { structure } = validateTailored(SOURCE, tailored, edit('shorten the Aegon bullets'));
+  assert.deepEqual(orgs(structure), ['Droady', 'Aegon', 'WesternBell']);
+});
+
+test('a removal worded two ways comes back with the words that would work', () => {
+  // "Cut" means delete and means shorten. Restoring and saying so costs one
+  // free edit; guessing wrong takes a job off a resume somebody then sends.
+  const tailored = clone();
+  tailored.experience = tailored.experience.filter((e) => e.org !== 'Aegon');
+
+  const { repairs } = validateTailored(SOURCE, tailored, edit('cut the Aegon job'));
+  const { warnings } = surfaceRepairs(repairs);
+  const answerable = warnings.find((w) => typeof w !== 'string');
+
+  assert.ok(answerable && typeof answerable !== 'string', 'the refusal carries its own answer');
+  assert.equal(answerable.retry, 'remove the Aegon job');
+  assert.match(answerable.text, /not clearly enough to act on/);
+});
+
+test('a skill the person asked to lose stays lost', () => {
+  const tailored = clone();
+  tailored.skills = [
+    { category: 'Languages', items: 'TypeScript, SQL' },
+    { category: 'Tools', items: 'Microsoft Excel, Ms PowerPoint' },
+  ];
+  const { structure, repairs } = validateTailored(SOURCE, tailored, edit('take Java out of my skills'));
+  assert.doesNotMatch(JSON.stringify(structure.skills), /Java/);
+  assert.ok(repairs.some((r) => r.kind === 'asked' && /Java/.test(r.logLine)));
+});
+
+test('a summary is written when asked for, and still dropped when not', () => {
+  const withOne = clone();
+  withOne.summary = 'Engineer who ships.';
+
+  const asked = validateTailored(SOURCE, withOne, edit('add a summary at the top'));
+  assert.equal(asked.structure.summary, 'Engineer who ships.');
+
+  const unasked = validateTailored(SOURCE, withOne, edit('shorten the Aegon bullets'));
+  assert.equal(unasked.structure.summary, undefined, 'a tailored copy grows no section of its own');
+});
+
+test('a date moves on the entry that was named, and nowhere else', () => {
+  const tailored = clone();
+  tailored.experience[0].dates = 'Nov 2025 – Aug 2026';
+  tailored.experience[1].dates = 'May 2025 – Dec 2099';
+
+  const { structure } = validateTailored(SOURCE, tailored, edit('change my Droady end date to Aug 2026'));
+  assert.equal(structure.experience[0].dates, 'Nov 2025 – Aug 2026');
+  assert.equal(structure.experience[1].dates, 'May 2025 – Aug 2026', 'Aegon was not asked about');
+});
+
+test('a one-job resume plus "remove that job" is not a failed edit', () => {
+  // It pairs nothing and the source had an entry, which used to read as a
+  // broken edit and return an error — refusing the request, then blaming the
+  // model for it.
+  const single: ResumeStructure = { ...SOURCE, experience: [SOURCE.experience[1]], projects: [], education: [] };
+  const { unusable, structure } = validateTailored(single, { ...single, experience: [] }, {
+    sourceLabel: 'the previous version',
+    asked: readInstruction('remove the Aegon job', single),
+  });
+  assert.equal(unusable, false);
+  assert.deepEqual(orgs(structure), []);
 });

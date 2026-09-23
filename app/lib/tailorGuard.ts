@@ -1,6 +1,7 @@
+import { NOTHING_ASKED, type Asked } from './asked';
 import { parseDates } from './entryFormat';
 import { patternFor, waysOfWriting } from './requirementMatch';
-import type { ResumeStructure } from './types';
+import type { ResumeStructure, ResumeWarning } from './types';
 
 /**
  * What the tailoring pass is not allowed to quietly take away.
@@ -43,12 +44,21 @@ type Project = ResumeStructure['projects'][number];
 type Education = ResumeStructure['education'][number];
 
 export interface Repair {
-  /** Decides where it surfaces and how loudly. See surfaceRepairs. */
-  kind: 'entry' | 'bullets' | 'field' | 'skill' | 'extra';
+  /**
+   * Decides where it surfaces and how loudly. See surfaceRepairs.
+   *
+   * `asked` is not a repair at all — it is the guard standing down because the
+   * person asked for this, recorded so the change log can say so. `unclear` is
+   * the opposite: a removal was worded, was not clear enough to act on, and the
+   * person needs to know that and be given the words that would work.
+   */
+  kind: 'entry' | 'bullets' | 'field' | 'skill' | 'extra' | 'asked' | 'unclear';
   /** One sentence, addressed to the person, ready to render. */
   message: string;
   /** The same event in the change log's voice. */
   logLine: string;
+  /** An instruction to offer as a button, for a refusal they can answer. */
+  retry?: string;
 }
 
 export interface TailorGuardResult {
@@ -230,7 +240,18 @@ export function restoreMissing<T>(
   source: T[],
   tailored: T[],
   pairs: Map<number, number>,
-): { entries: T[]; missing: T[] } {
+  /**
+   * Whether an entry that did not come back should be put back.
+   *
+   * Absent — every caller before instructions existed — means yes, always,
+   * which is what the tailor path still does. An entry the person asked to
+   * remove is reported separately in `removed`, and must NOT be filtered out of
+   * `source` by the caller instead: an entry missing from the source list reads
+   * as a stray further down and earns a "this is not in your profile" warning
+   * for the very thing they asked to delete.
+   */
+  keep?: (item: T) => boolean,
+): { entries: T[]; missing: T[]; removed: T[] } {
   const from = new Map<number, number>();
   for (const [s, t] of pairs) from.set(t, s);
 
@@ -239,9 +260,14 @@ export function restoreMissing<T>(
   // look identical.
   const out = tailored.map((item, t) => ({ item, from: from.get(t) ?? -1 }));
   const missing: T[] = [];
+  const removed: T[] = [];
 
   for (let s = 0; s < source.length; s += 1) {
     if (out.some((slot) => slot.from === s)) continue;
+    if (keep && !keep(source[s])) {
+      removed.push(source[s]);
+      continue;
+    }
     missing.push(source[s]);
 
     let at = -1;
@@ -256,7 +282,7 @@ export function restoreMissing<T>(
     out.splice(at < 0 ? out.length : at, 0, { item: source[s], from: s });
   }
 
-  return { entries: out.map((slot) => slot.item), missing };
+  return { entries: out.map((slot) => slot.item), missing, removed };
 }
 
 // ── reconciling a matched pair ─────────────────────────────────────────────
@@ -275,6 +301,8 @@ function reverted(
   kind: 'dates' | 'employer' | 'school' | 'location' | 'title',
   what: string,
   to: string,
+  /** Where it was set back to. An edit compares against the version on screen. */
+  from: string,
 ): Repair {
   const nouns: Record<typeof kind, string> = {
     dates: 'dates',
@@ -287,8 +315,8 @@ function reverted(
     kind: 'field',
     message:
       kind === 'title'
-        ? `The title on ${what} had been changed in a way that reads more senior, so it was set back to what your profile says: ${to}.`
-        : `The ${nouns[kind]} on ${what} had been changed, so ${nouns[kind] === 'dates' ? 'they were' : 'it was'} set back to what your profile says: ${to}.`,
+        ? `The title on ${what} had been changed in a way that reads more senior, so it was set back to what ${from} says: ${to}.`
+        : `The ${nouns[kind]} on ${what} had been changed, so ${nouns[kind] === 'dates' ? 'they were' : 'it was'} set back to what ${from} says: ${to}.`,
     logLine: `${what}: ${nouns[kind]} set back to ${to}; the tailoring had changed ${nouns[kind] === 'dates' ? 'them' : 'it'}.`,
   };
 }
@@ -301,13 +329,19 @@ const jobLabel = (x: { title?: string; org?: string; dates?: string }) =>
  * that left the sign up, and a heading with nothing under it is worse than
  * either keeping the entry or cutting it.
  */
-function keepBullets(source: string[], tailored: unknown, what: string, repairs: Repair[]): string[] {
+function keepBullets(
+  source: string[],
+  tailored: unknown,
+  what: string,
+  repairs: Repair[],
+  from: string,
+): string[] {
   const kept = asList<string>(tailored).filter((b) => typeof b === 'string' && b.trim());
   if (kept.length > 0 || source.length === 0) return kept;
   repairs.push({
     kind: 'bullets',
-    message: `${what} came back with no bullet points at all, so the ones from your profile were kept. Trim them yourself if the resume runs long.`,
-    logLine: `${what}: every bullet had been removed, leaving a heading over nothing. Restored from your profile.`,
+    message: `${what} came back with no bullet points at all, so the ones from ${from} were kept. Trim them yourself if the resume runs long.`,
+    logLine: `${what}: every bullet had been removed, leaving a heading over nothing. Restored from ${from}.`,
   });
   return source;
 }
@@ -331,11 +365,38 @@ export function validateTailored(
    * telling somebody their bullets were "restored from your profile" when they
    * came from the previous version is simply untrue.
    */
-  options: { sourceLabel?: string } = {},
+  options: {
+    sourceLabel?: string;
+    /**
+     * What the person asked for in their own words.
+     *
+     * Absent on the tailor path, where nobody typed anything, and the guard
+     * then behaves exactly as it did before instructions were read at all.
+     */
+    asked?: Asked;
+  } = {},
 ): TailorGuardResult {
   const repairs: Repair[] = [];
   const from = options.sourceLabel ?? 'your profile';
+  const asked = options.asked ?? NOTHING_ASKED;
   const raw = (normaliseTailored(tailored) ?? {}) as Partial<ResumeStructure>;
+
+  /** The guard standing down, recorded so the change log can say so. */
+  const asAsked = (logLine: string): Repair => ({ kind: 'asked', message: logLine, logLine });
+
+  /**
+   * A refusal the person can answer.
+   *
+   * They worded a removal — "cut the Aegon job" — and the wording means two
+   * things, so it was put back rather than acted on. The words that would work
+   * ride along as `retry`, which the screen offers as a button.
+   */
+  const unclear = (name: string, noun: string): Repair => ({
+    kind: 'unclear',
+    message: `You asked for ${name} to go, but not clearly enough to act on, so it was put back. "Remove the ${name} ${noun}" will do it.`,
+    logLine: `${name}: put back — the instruction read as a removal but was not clear enough to act on.`,
+    retry: `remove the ${name} ${noun}`,
+  });
 
   // ── experience ──
   const srcJobs = asList<Experience>(source.experience);
@@ -349,29 +410,50 @@ export function validateTailored(
     const fixed: Experience = { ...out };
     const what = jobLabel(src);
 
-    // Reverted, not merely flagged. A dropped job is visible the moment somebody
-    // reads their own resume; a date quietly moved by three months looks right,
-    // reads right, and is found by a background check.
-    if (dateKey(out.dates) !== dateKey(src.dates)) repairs.push(reverted('dates', what, src.dates));
-    fixed.dates = src.dates;
-    if (norm(out.org) !== norm(src.org)) repairs.push(reverted('employer', what, src.org));
+    /*
+     * Reverted, not merely flagged — unless they asked for it.
+     *
+     * A dropped job is visible the moment somebody reads their own resume; a
+     * date quietly moved by three months looks right, reads right, and is found
+     * by a background check. So a date changes only when the instruction named
+     * this entry AND stated the date that came back; anything else is set back.
+     */
+    if (dateKey(out.dates) !== dateKey(src.dates)) {
+      if (asked.allowsDates(src.org, asText(out.dates))) {
+        fixed.dates = asText(out.dates);
+        repairs.push(asAsked(`${what}: dates changed to ${fixed.dates}, as you asked.`));
+      } else {
+        repairs.push(reverted('dates', what, src.dates, from));
+        fixed.dates = src.dates;
+      }
+    } else {
+      fixed.dates = src.dates;
+    }
+    if (norm(out.org) !== norm(src.org)) repairs.push(reverted('employer', what, src.org, from));
     fixed.org = src.org;
     if (norm(out.location) !== norm(src.location) && norm(src.location)) {
-      repairs.push(reverted('location', what, src.location));
+      repairs.push(reverted('location', what, src.location, from));
     }
     fixed.location = src.location;
 
     if (JUNIOR.test(src.title ?? '') && !JUNIOR.test(asText(out.title))) {
-      repairs.push(reverted('title', what, src.title));
+      repairs.push(reverted('title', what, src.title, from));
       fixed.title = src.title;
     }
 
-    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs);
+    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from);
     return fixed;
   });
 
-  const jobs = restoreMissing(srcJobs, reconciledJobs, jobPairs);
+  const jobs = restoreMissing(srcJobs, reconciledJobs, jobPairs, (job) => !asked.removes('experience', job.org));
+  for (const gone of jobs.removed) {
+    repairs.push(asAsked(`${jobLabel(gone)}: removed, as you asked.`));
+  }
   for (const lost of jobs.missing) {
+    if (asked.nearlyRemoves(lost.org)) {
+      repairs.push(unclear(lost.org, 'job'));
+      continue;
+    }
     repairs.push({
       kind: 'entry',
       message: `The tailoring dropped your ${jobLabel(lost)}${lost.dates ? ` (${lost.dates})` : ''} and it has been put back as ${from} has it. Read it over — it will not sound like the entries around it.`,
@@ -390,17 +472,38 @@ export function validateTailored(
     const src = srcProjects[s];
     const fixed: Project = { ...out };
     const what = src.name || 'a project';
-    if (dateKey(out.dates) !== dateKey(src.dates)) repairs.push(reverted('dates', what, src.dates));
-    fixed.dates = src.dates;
+    if (dateKey(out.dates) !== dateKey(src.dates)) {
+      if (asked.allowsDates(src.name, asText(out.dates))) {
+        fixed.dates = asText(out.dates);
+        repairs.push(asAsked(`${what}: dates changed to ${fixed.dates}, as you asked.`));
+      } else {
+        repairs.push(reverted('dates', what, src.dates, from));
+        fixed.dates = src.dates;
+      }
+    } else {
+      fixed.dates = src.dates;
+    }
     // The schema asks for the link to come back untouched. Asking is not
     // enforcing, and a link is not something tailoring has an opinion about.
     fixed.url = src.url;
-    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs);
+    fixed.bullets = keepBullets(asList<string>(src.bullets), out.bullets, what, repairs, from);
     return fixed;
   });
 
-  const projects = restoreMissing(srcProjects, reconciledProjects, projectPairs);
+  const projects = restoreMissing(
+    srcProjects,
+    reconciledProjects,
+    projectPairs,
+    (project) => !asked.removes('projects', project.name),
+  );
+  for (const gone of projects.removed) {
+    repairs.push(asAsked(`${gone.name}: removed, as you asked.`));
+  }
   for (const lost of projects.missing) {
+    if (asked.nearlyRemoves(lost.name)) {
+      repairs.push(unclear(lost.name, 'project'));
+      continue;
+    }
     repairs.push({
       kind: 'entry',
       message: `The tailoring dropped your ${lost.name} project and it has been put back as ${from} has it.`,
@@ -419,9 +522,18 @@ export function validateTailored(
     const src = srcSchools[s];
     const fixed: Education = { ...out };
     const what = src.school || 'your education';
-    if (dateKey(out.dates) !== dateKey(src.dates)) repairs.push(reverted('dates', what, src.dates));
-    fixed.dates = src.dates;
-    if (norm(out.school) !== norm(src.school)) repairs.push(reverted('school', what, src.school));
+    if (dateKey(out.dates) !== dateKey(src.dates)) {
+      if (asked.allowsDates(src.school, asText(out.dates))) {
+        fixed.dates = asText(out.dates);
+        repairs.push(asAsked(`${what}: dates changed to ${fixed.dates}, as you asked.`));
+      } else {
+        repairs.push(reverted('dates', what, src.dates, from));
+        fixed.dates = src.dates;
+      }
+    } else {
+      fixed.dates = src.dates;
+    }
+    if (norm(out.school) !== norm(src.school)) repairs.push(reverted('school', what, src.school, from));
     fixed.school = src.school;
     fixed.location = src.location;
     // A degree is a credential, not a pitch. There is no job-specific better
@@ -471,18 +583,33 @@ export function validateTailored(
 
   const skills = outSkills.length ? outSkills.map((g) => ({ ...g })) : srcSkills.map((g) => ({ ...g }));
   const lostTerms: string[] = [];
+  const droppedTerms: string[] = [];
 
   if (outSkills.length) {
     // Group by group, so a term goes home rather than to the end. Regrouping is
     // the tailor's to decide; losing somebody's PowerPoint is not.
     for (const group of srcSkills) {
-      const missing = splitTerms(asText(group.items)).filter((t) => norm(t) && !stillThere(t));
+      const gone = splitTerms(asText(group.items)).filter((t) => norm(t) && !stillThere(t));
+      /*
+       * A skill the person asked to lose stays lost.
+       *
+       * Looser than the rule for a whole entry on purpose: the worst a wrong
+       * grant does here is take one word out of a comma list, in plain view,
+       * where the worst a wrong grant does to an entry is delete a job.
+       */
+      const licensed = gone.filter((term) => asked.removesSkill(term));
+      droppedTerms.push(...licensed);
+      const missing = gone.filter((term) => !asked.removesSkill(term));
       if (!missing.length) continue;
       lostTerms.push(...missing);
       const home = skills.find((g) => norm(g.category) === norm(group.category));
       if (home) home.items = [home.items, ...missing].filter(Boolean).join(', ');
       else skills.push({ category: asText(group.category) || 'Skills', items: missing.join(', ') });
     }
+  }
+
+  if (droppedTerms.length) {
+    repairs.push(asAsked(`Skills: removed ${droppedTerms.join(', ')}, as you asked.`));
   }
 
   if (lostTerms.length) {
@@ -528,13 +655,35 @@ export function validateTailored(
 
   // Same rule for the summary: a tailored copy does not grow a section the
   // master resume does not have. The person decides what sections they have.
-  const summary = source.summary?.trim() ? asText(raw.summary).trim() || source.summary : undefined;
-  if (source.summary?.trim() && !asText(raw.summary).trim()) {
+  /*
+   * Four ways this can go, and the person's own words decide two of them.
+   *
+   * A tailored copy still does not grow a section the master resume lacks —
+   * that rule stopped four tailors in a row logging "Added a summary…" on a
+   * resume with no summary on it. But "add a summary" is somebody asking for
+   * one, and dropping it silently was the app refusing a request without
+   * saying so.
+   */
+  const returnedSummary = asText(raw.summary).trim();
+  const hadSummary = Boolean(source.summary?.trim());
+  let summary: string | undefined;
+  if (hadSummary && returnedSummary) {
+    summary = returnedSummary;
+  } else if (hadSummary && asked.dropsSummary) {
+    summary = undefined;
+    repairs.push(asAsked('Summary: removed, as you asked.'));
+  } else if (hadSummary) {
+    summary = source.summary;
     repairs.push({
       kind: 'entry',
       message: 'Your summary was missing from the tailored version and has been put back.',
       logLine: `Summary: dropped by the tailoring and restored from ${from}.`,
     });
+  } else if (returnedSummary && asked.wantsSummary) {
+    summary = returnedSummary;
+    repairs.push(asAsked('Summary: added, as you asked.'));
+  } else {
+    summary = undefined;
   }
 
   // An entry that answers to nothing in the profile is reported and kept. The
@@ -559,9 +708,16 @@ export function validateTailored(
      * resume, and saving it as one is how somebody paid a credit for their own
      * profile under a new filename.
      */
+    /*
+     * Removals the person asked for do not count against this.
+     *
+     * A one-job resume plus "remove that job" pairs nothing and has a source
+     * entry, which read as a failed edit and returned a 502 — refusing the
+     * request and blaming the model for it.
+     */
     unusable:
       jobPairs.size + projectPairs.size + schoolPairs.size === 0 &&
-      srcJobs.length + srcProjects.length + srcSchools.length > 0,
+      srcJobs.length + srcProjects.length + srcSchools.length - jobs.removed.length - projects.removed.length > 0,
     structure: {
       // Nothing the tailored copies carry that the source does not.
       name: source.name,
@@ -593,9 +749,13 @@ export function validateTailored(
  * Guard lines lead the log. The point of a restore notice is lost at item
  * fourteen of sixteen.
  */
-export function surfaceRepairs(repairs: Repair[]): { warnings: string[]; log: string[] } {
+export function surfaceRepairs(repairs: Repair[]): { warnings: ResumeWarning[]; log: string[] } {
   return {
-    warnings: repairs.filter((r) => r.kind !== 'skill').map((r) => r.message),
+    // `asked` joins `skill` in the log only: the guard standing down because
+    // somebody asked it to is not something to check before sending.
+    warnings: repairs
+      .filter((r) => r.kind !== 'skill' && r.kind !== 'asked')
+      .map((r) => (r.retry ? { text: r.message, retry: r.retry } : r.message)),
     log: repairs.map((r) => r.logLine),
   };
 }

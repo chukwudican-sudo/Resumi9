@@ -2,15 +2,9 @@
 
 import type { ReactNode } from 'react';
 import Stages from '../Stages';
+import PageOutline from './PageOutline';
 import { REASSURE, TAILOR_STEPS } from '../../lib/waits';
 import type { RequirementMatch } from '../../lib/requirementMatch';
-
-/** The shape of a resume page, for the one that does not exist yet. */
-const PAGE_SECTIONS: number[][] = [
-  [94, 86],
-  [90, 96, 78, 88],
-  [92, 84, 70],
-];
 
 /** Where "What changed" will be, drawn faint so it reads as not-yet. */
 const LOG_LINES: number[][] = [
@@ -151,28 +145,7 @@ export default function BeforeResume({
       <div className="order-1 flex flex-col items-center gap-4 bg-ground-band px-6 py-7 lg:order-none lg:overflow-y-auto">
         {middle}
 
-        {/*
-          The page that is coming. It pulses only while something is actually
-          being written — a skeleton still shimmering under "That didn't work"
-          would be the screen contradicting itself.
-        */}
-        <div
-          aria-hidden="true"
-          className={`flex aspect-[8.5/11] w-full max-w-[420px] flex-col gap-2.5 border border-rule-field bg-ground-surface px-9 py-8 ${
-            state.kind === 'writing' ? 'animate-pulse motion-reduce:animate-none' : 'opacity-60'
-          }`}
-        >
-          <div className="mx-auto h-2.5 w-[46%] rounded bg-rule" />
-          <div className="mx-auto h-1.5 w-[62%] rounded bg-rule-soft" />
-          {PAGE_SECTIONS.map((lines, i) => (
-            <div key={i} className="mt-3 flex flex-col gap-2">
-              <div className="h-1.5 w-[22%] rounded bg-rule-field" />
-              {lines.map((w, j) => (
-                <div key={j} className="h-1.5 rounded bg-rule" style={{ width: `${w}%` }} />
-              ))}
-            </div>
-          ))}
-        </div>
+        <PageOutline pulse={state.kind === 'writing'} />
       </div>
 
       <aside className="order-2 flex flex-col gap-4 border-t border-rule px-5 py-5 lg:order-none lg:overflow-y-auto lg:border-l lg:border-t-0">

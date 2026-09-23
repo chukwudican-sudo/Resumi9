@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
-import { TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
+import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
+import { readInstruction } from '../../../../lib/asked';
 import { surfaceRepairs, validateTailored } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
 import { requireUserId } from '../../../../server/auth';
@@ -112,6 +113,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   const { profile: annotated, index } = annotate(structure);
 
+  /*
+   * What the person's own words give permission for.
+   *
+   * Read once, in code, and handed to both checks below. Without it they cannot
+   * tell the model dropping a job from somebody asking for it to go, so they
+   * undid both — and then told the person "the tailoring dropped your Aegon
+   * role and it has been put back", directly under their own instruction saying
+   * to remove it.
+   */
+  const asked = readInstruction(instruction, structure);
+
   const content = [
     {
       type: 'text' as const,
@@ -124,7 +136,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         '```',
         `Job posting — Company: ${posting?.company ?? '(not provided)'}, Role: ${posting?.role ?? '(not provided)'}\n${posting?.description ?? '(no description)'}`,
         `The person has asked for one change: "${instruction}"`,
-        'Apply this single instruction as a surgical edit to the structure — only touch the relevant field(s), and return the full structure via the submit_resume_update tool. Do not re-tailor the entire resume from scratch, and do not improve anything you were not asked about. Never add an achievement, a number or a tool that is not already in the structure.',
+        'Apply this single instruction as a surgical edit to the structure — only touch the relevant field(s), and return the full structure via the submit_resume_update tool. Do not re-tailor the entire resume from scratch, and do not improve anything you were not asked about. Never add an achievement, a number or a tool that is in neither the structure nor the instruction above — the instruction is the person\'s own account of their own work, and Rule 1 names it as evidence.',
       ].join('\n\n'),
     },
   ];
@@ -136,13 +148,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       system: TAILOR_INVARIANT,
       // The old handler passed none of this, so it ignored the person's own
       // rules and wrote in whatever English it felt like.
-      systemSuffix: buildUserContext({
-        displayName: structure.name || user?.displayName,
-        locale: user?.locale,
-        rules,
-        stage: user?.stage,
-        targetField: user?.targetField,
-      }),
+      systemSuffix: [
+        buildUserContext({
+          displayName: structure.name || user?.displayName,
+          locale: user?.locale,
+          rules,
+          stage: user?.stage,
+          targetField: user?.targetField,
+        }),
+        EDIT_LICENCE,
+      ].join('\n\n'),
       content,
       tool: INSTRUCT_TOOL,
       // An edit is a model call like any other, and it had no budget at all:
@@ -167,7 +182,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * Docker at Droady, add it" is the person telling it something true.
      */
     const resolved = resolveTailored(toolInput.structure, index);
-    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? []);
+    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? [], asked);
     const honest = applyFlags(resolved.structure, flags);
 
     // The source here is the version on screen, not the profile — so the guard
@@ -176,6 +191,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // previous tailoring's wording.
     const guarded = validateTailored(structure, honest.structure, {
       sourceLabel: 'the previous version',
+      asked,
     });
     const surfaced = surfaceRepairs(guarded.repairs);
 

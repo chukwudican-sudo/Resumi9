@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { ResumeStructure } from '../../lib/types';
+import type { ResumeStructure, ResumeWarning } from '../../lib/types';
 import DownloadPdf from './DownloadPdf';
 import Stages from '../Stages';
 import { INSTRUCT_STEPS, REASSURE } from '../../lib/waits';
@@ -12,6 +12,7 @@ import StatusPicker from './StatusPicker';
 import VersionPicker, { type ResumeVersion } from './VersionPicker';
 import type { ApplicationStatus } from './ApplicationRow';
 import PdfPreview from './PdfPreview';
+import PageOutline from './PageOutline';
 import StrengthenPanel from './StrengthenPanel';
 import { restoreResumeVersion } from '../../server/actions';
 import BeforeResume from './BeforeResume';
@@ -48,7 +49,8 @@ interface Props {
     matchScore: number | null;
     missingRequirements: string[];
     log: string[];
-    warnings: string[];
+    /** Sentences, some carrying the instruction that would answer them. */
+    warnings: ResumeWarning[];
     version: number;
   } | null;
   versions: ResumeVersion[];
@@ -309,57 +311,61 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
             </p>
           </div>
 
-          {/*
-            The column holds still; the sheet inside it scrolls.
-
-            That split is not styling. It is what lets the wait below cover the
-            part of the resume somebody is actually looking at.
-          */}
-          <div className="relative order-1 flex min-h-0 flex-col bg-ground-band lg:order-none">
-            <div className="flex w-full flex-col items-center px-8 py-7 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-              <div className="mb-4 flex w-full max-w-[600px] items-center justify-between">
-                <span className="text-xs text-ink-muted">
-                  Version {resume.version}
-                  {!isLatest ? ' · an earlier version' : null}
-                </span>
-                <span className="inline-flex items-center gap-1.5 rounded-[3px] bg-accent-wash px-2.5 py-1 text-[11.5px] text-accent">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                  ATS-safe
-                </span>
-              </div>
-              {/* The compiled document, and nothing drawn on it: this is what
-                  downloads, so a marked-up copy would stop it being a preview. */}
-              <PdfPreview applicationId={applicationId} version={resume.version} reloadKey={resume.version} />
-            </div>
-
-            {/*
-              An instruction rewrites the resume, so the wait sits over the
-              resume. "make bullet three shorter" costs a full regeneration —
-              the tool requires everything returned verbatim — so this is ten to
-              thirty seconds behind a button that only said "Applying…".
-
-              It covers the COLUMN, and that is why it lives out here rather than
-              inside the scrolling part. `inset-0` on a child of a scrolling
-              element covers the first screenful of its CONTENT, not what is on
-              screen — so scrolled down to page two, this sat somewhere above the
-              viewport and the resume showed through underneath, reported as
-              "it shows half of the preview when buffering". Nothing about the
-              wait was wrong; it was measuring the wrong box.
-            */}
+          <div className="order-1 flex min-h-0 flex-col bg-ground-band lg:order-none">
             {editing ? (
-              <div className="absolute inset-0 z-10 flex animate-[fadeIn_180ms_ease-out] items-center justify-center bg-ground-band px-8">
-                <div className="w-full max-w-[290px]">
-                  <Stages
-                    steps={INSTRUCT_STEPS}
-                    done={!editing}
-                    estimate="Usually about twenty seconds."
-                    reassure={REASSURE}
-                  />
+              /*
+               * The wait IS the column while an edit runs, rather than a layer
+               * over it.
+               *
+               * An overlay was tried twice. `inset-0` inside the scrolling
+               * element covered the first screenful of CONTENT rather than what
+               * was on screen, so scrolled down to page two the wait sat above
+               * the viewport and the resume showed through beneath it — "it
+               * shows half of the preview when buffering". Moving the overlay
+               * out to a column that no longer scrolls should have fixed that,
+               * and on a real screen it still came back half covered: the whole
+               * approach depends on the column being exactly as tall as the
+               * viewport, which is an assumption about six ancestors.
+               *
+               * Not rendering the resume at all cannot half-cover anything, and
+               * it costs nothing — an edit changes the version, so the preview
+               * was going to be rebuilt the moment this cleared either way.
+               */
+              <div className="flex w-full flex-col items-center gap-4 px-8 py-7">
+                <div className="w-full max-w-[420px] rounded-md border border-rule bg-ground-surface px-5 pb-3 pt-5">
+                  <h1 className="font-serif text-[26px] leading-[1.1]">Making that change.</h1>
+                  <div className="mt-3">
+                    <Stages
+                      steps={INSTRUCT_STEPS}
+                      done={false}
+                      estimate="Usually about twenty seconds."
+                      reassure={REASSURE}
+                    />
+                  </div>
                 </div>
+                {/* The same sheet the tailor's wait draws, so an edit does not
+                    look like a different app for twenty seconds. */}
+                <PageOutline />
               </div>
-            ) : null}
+            ) : (
+              <div className="flex w-full flex-col items-center px-8 py-7 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+                <div className="mb-4 flex w-full max-w-[600px] items-center justify-between">
+                  <span className="text-xs text-ink-muted">
+                    Version {resume.version}
+                    {!isLatest ? ' · an earlier version' : null}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-[3px] bg-accent-wash px-2.5 py-1 text-[11.5px] text-accent">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                    ATS-safe
+                  </span>
+                </div>
+                {/* The compiled document, and nothing drawn on it: this is what
+                    downloads, so a marked-up copy would stop it being a preview. */}
+                <PdfPreview applicationId={applicationId} version={resume.version} reloadKey={resume.version} />
+              </div>
+            )}
           </div>
 
           <aside className="order-2 flex min-h-0 flex-col border-t border-rule bg-ground-surface lg:order-none lg:border-l lg:border-t-0">
@@ -561,9 +567,33 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                   {resume.warnings.length > 0 ? (
                     <div className="flex flex-col gap-2 rounded-md border border-flag-line bg-flag-bg p-4">
                       <span className="text-[11px] uppercase tracking-[0.12em] text-flag">Worth checking</span>
-                      {resume.warnings.map((w, i) => (
-                        <span key={i} className="text-[13px] leading-snug text-flag-ink">{w}</span>
-                      ))}
+                      {resume.warnings.map((w, i) => {
+                        const text = typeof w === 'string' ? w : w.text;
+                        const retry = typeof w === 'string' ? null : w.retry;
+                        return (
+                          <span key={i} className="text-[13px] leading-snug text-flag-ink">
+                            {text}
+                            {/*
+                              A refusal somebody can answer without retyping it.
+                              The guard put something back because the wording
+                              meant two things; this is the wording that does not.
+                            */}
+                            {retry ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setInstruction(retry);
+                                  composer.current?.scrollIntoView({ block: 'nearest' });
+                                  composer.current?.focus();
+                                }}
+                                className="mt-1.5 block text-[12px] text-accent transition hover:text-accent-hover"
+                              >
+                                Yes &mdash; {retry}
+                              </button>
+                            ) : null}
+                          </span>
+                        );
+                      })}
                     </div>
                   ) : null}
 

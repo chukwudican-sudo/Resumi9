@@ -1,3 +1,4 @@
+import { NOTHING_ASKED, type Asked } from './asked';
 import type { ResolvedBullet } from './provenance';
 import { patternFor, waysOfWriting } from './requirementMatch';
 
@@ -152,19 +153,39 @@ const said = (haystack: string, term: string, scattered = false): boolean =>
 export function checkBullets(
   bullets: ResolvedBullet[],
   requirements: string[] = [],
+  asked: Asked = NOTHING_ASKED,
 ): Flag[] {
   const flags: Flag[] = [];
 
   for (const bullet of bullets) {
     if (!bullet.changed) continue;
 
-    const evidence = bullet.evidence.join(' \n ');
+    const source = bullet.evidence.join(' \n ');
+    /*
+     * The person's own instruction is evidence, because they are the source for
+     * their own history.
+     *
+     * "Add that I used C# at Droady" came back reverted: C# is a requirement
+     * this posting names and the source bullet does not contain it, so the
+     * check read it as the model reaching for the posting's vocabulary. It
+     * could not tell that from somebody stating a fact about their own work.
+     * Their words now sit beside the bullet's own, and only for the edit that
+     * carries them — a tailor has no instruction and behaves exactly as before.
+     */
+    const evidence = asked.words ? `${source} \n ${asked.words}` : source;
     const fallback = bullet.evidence[0] ?? '';
 
-    // A sentence that names no source at all. Whole invented bullets — "code
-    // reviews and status meetings", "worked cross-functionally with
-    // stakeholders" — arrived exactly this way.
-    if (bullet.unsourced || !evidence.trim()) {
+    /*
+     * A sentence that names no source at all. Whole invented bullets — "code
+     * reviews and status meetings", "worked cross-functionally with
+     * stakeholders" — arrived exactly this way.
+     *
+     * Tested against the SOURCE rather than the widened evidence, deliberately:
+     * an instruction in the room must not turn a bullet that came from nowhere
+     * into one that merely claims too much, which would change both what
+     * happens to it and what the person is told.
+     */
+    if (bullet.unsourced || !source.trim()) {
       flags.push({ text: bullet.text, revertTo: '', reason: 'is not based on anything in your profile' });
       continue;
     }

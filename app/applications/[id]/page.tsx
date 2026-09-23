@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import ApplicationView from '../../components/applications/ApplicationView';
 import type { ApplicationStatus } from '../../components/applications/ApplicationRow';
-import type { ResumeStructure } from '../../lib/types';
+import type { ResumeStructure, ResumeWarning } from '../../lib/types';
 import { requireUserId } from '../../server/auth';
 import { getActiveRules, getApplication, getLatestResume, getProfile, getResumeVersion, listResumeVersions } from '../../server/db/repository';
 import { runChecks } from '../../lib/ruleCheck';
@@ -114,7 +114,7 @@ export default async function ApplicationPage({
               matchScore: resume.matchScore,
               missingRequirements: (resume.missingRequirements as string[]) ?? [],
               log: (resume.log as string[]) ?? [],
-              warnings: (resume.warnings as string[]) ?? [],
+              warnings: (resume.warnings as ResumeWarning[]) ?? [],
               version: resume.version,
             }
           : null

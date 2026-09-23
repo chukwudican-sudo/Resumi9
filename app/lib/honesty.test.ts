@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readInstruction } from './asked';
 import { applyFlags, checkBullets } from './honesty';
 import type { ResolvedBullet } from './provenance';
+import type { ResumeStructure } from './types';
 
 /**
  * The cases are real. Every "caught" test below is a sentence that appeared on
@@ -305,4 +307,74 @@ test('nothing flagged means nothing said', () => {
   assert.equal(same, structure);
   assert.deepEqual(log, []);
   assert.deepEqual(warnings, []);
+});
+
+// ── the person's own words are evidence ────────────────────────────────────
+//
+// The check compares a rewrite against the bullet it came from, which is right
+// for a tailor — nobody said anything — and wrong for an edit, where somebody
+// just told it something true about their own work.
+
+const EMPTY: ResumeStructure = {
+  name: 'Chukwudi Alex',
+  contact: {},
+  education: [],
+  experience: [{ title: 'Engineer', org: 'Droady', location: 'SF', dates: '2025', bullets: ['Built the billing service'] }],
+  projects: [],
+  skills: [],
+};
+
+test('a tool the person says they used is theirs to add', () => {
+  // C# is a requirement this posting names and the source bullet does not
+  // contain, which is exactly the shape of an invention — and exactly the shape
+  // of somebody answering the gap honestly.
+  const asked = readInstruction('add that I used C# at Droady', EMPTY);
+  const flags = checkBullets(
+    [bullet({ text: 'Built the billing service in C#', evidence: ['Built the billing service'] })],
+    ['C#'],
+    asked,
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('a number the person supplies is not an invented one', () => {
+  const asked = readInstruction('the detector had 500 users', EMPTY);
+  const flags = checkBullets(
+    [bullet({ text: 'Shipped a detector used by 500 people', evidence: ['Shipped a detector'] })],
+    [],
+    asked,
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('being asked for one thing does not license everything else in the run', () => {
+  const asked = readInstruction('add that I used C# at Droady', EMPTY);
+  const flags = checkBullets(
+    [
+      bullet({ text: 'Built the billing service in C#', evidence: ['Built the billing service'] }),
+      bullet({ text: 'Worked cross-functionally with stakeholders on checkout', evidence: ['Worked on the checkout flow'] }),
+    ],
+    ['C#'],
+    asked,
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /cross-functional|stakeholder/);
+});
+
+test('a bullet built on nothing is still removed, instruction or not', () => {
+  // Pinned because the widened evidence must not change which branch this
+  // falls into: whole invented bullets arrived by exactly this route.
+  const asked = readInstruction('add that I used C# at Droady', EMPTY);
+  const flags = checkBullets([bullet({ text: 'Ran the department', unsourced: true })], [], asked);
+  assert.equal(flags.length, 1);
+  assert.equal(flags[0].revertTo, '');
+  assert.match(flags[0].reason, /not based on anything/);
+});
+
+test('with nothing asked, the same rewrite is still caught', () => {
+  const flags = checkBullets(
+    [bullet({ text: 'Built the billing service in C#', evidence: ['Built the billing service'] })],
+    ['C#'],
+  );
+  assert.equal(flags.length, 1);
 });
