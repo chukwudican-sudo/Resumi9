@@ -3,8 +3,9 @@ import ApplicationView from '../../components/applications/ApplicationView';
 import type { ApplicationStatus } from '../../components/applications/ApplicationRow';
 import type { ResumeStructure } from '../../lib/types';
 import { requireUserId } from '../../server/auth';
-import { getActiveRules, getApplication, getLatestResume, getProfile, getResumeVersion, listResumeVersions } from '../../server/db/repository';
+import { countInstructedSince, getActiveRules, getApplication, getLatestResume, getProfile, getResumeVersion, listResumeVersions } from '../../server/db/repository';
 import { runChecks } from '../../lib/ruleCheck';
+import { asLines, storedLines } from '../../lib/changeLog';
 import { postingReadyToTailor } from '../../lib/readiness';
 import { matchRequirements } from '../../lib/requirementMatch';
 import type { RuleCheck } from '../../lib/rules';
@@ -34,13 +35,16 @@ export default async function ApplicationPage({
   const asked = Number(searchParams?.v);
   const wanted = Number.isFinite(asked) && asked > 0 ? asked : null;
 
-  const [latest, versions, rules, profile] = await Promise.all([
+  const [latest, versions, rules, profile, editsSinceTailor] = await Promise.all([
     getLatestResume(userId, params.id),
     listResumeVersions(userId, params.id),
     getActiveRules(userId),
     // For what the posting asks for against what the profile already says,
     // shown while a tailor writes. Read here so it arrives with the page.
     getProfile(userId),
+    // What another tailor would undo. The same count the edit route spends
+    // from, so the warning and the allowance can never disagree.
+    countInstructedSince(userId, params.id),
   ]);
 
   // An unknown version falls back rather than 404s: a stale link should show
@@ -75,6 +79,7 @@ export default async function ApplicationPage({
       applicationId={params.id}
       isLatest={isLatest}
       startTailor={startTailor}
+      editsSinceTailor={editsSinceTailor}
       requirementMatch={matchRequirements((profile?.resumeStructure ?? null) as ResumeStructure | null, requirements)}
       /*
        * Checked here, not stored.
@@ -113,8 +118,29 @@ export default async function ApplicationPage({
               structure: resume.structure as ResumeStructure,
               matchScore: resume.matchScore,
               missingRequirements: (resume.missingRequirements as string[]) ?? [],
-              log: (resume.log as string[]) ?? [],
-              warnings: (resume.warnings as string[]) ?? [],
+              /*
+               * Mended on the way out, like the warnings below.
+               *
+               * Four versions on one resume were saved one letter per row,
+               * before the tool's answer was made into sentences at the point
+               * it is read. No code change reaches a row already written, and
+               * rewriting somebody's saved history to fix our own bug is worse
+               * than reading it carefully — so the repair lives here, where
+               * every reader passes.
+               */
+              log: storedLines(resume.log),
+              /*
+               * Sentences, whatever shape they were stored in.
+               *
+               * A build that lived for one afternoon wrote a warning as
+               * `{ text, retry }` so the screen could offer a button. The button
+               * is gone and the shape with it — but the rows written in that
+               * window are still in the database, and handing React an object to
+               * render takes the whole page down rather than one line of it.
+               * Anything that is not a sentence is made into one here, where
+               * every reader of a stored resume passes.
+               */
+              warnings: asLines(resume.warnings),
               version: resume.version,
             }
           : null

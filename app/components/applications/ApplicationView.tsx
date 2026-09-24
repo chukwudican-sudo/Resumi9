@@ -31,6 +31,8 @@ interface Props {
    * which holds all three facts — see applications/[id]/page.tsx.
    */
   startTailor: boolean;
+  /** Hand edits made since the last tailor — all of them undone by another one. */
+  editsSinceTailor: number;
   /** What the posting asks for, split by whether the profile already says it. */
   requirementMatch: RequirementMatch;
   /** How each of the person's rules fared on this version. Computed, not stored. */
@@ -55,7 +57,7 @@ interface Props {
   versions: ResumeVersion[];
 }
 
-export default function ApplicationView({ applicationId, isLatest, startTailor, requirementMatch, ruleResults, status, posting, resume, versions }: Props) {
+export default function ApplicationView({ applicationId, isLatest, startTailor, editsSinceTailor, requirementMatch, ruleResults, status, posting, resume, versions }: Props) {
   const router = useRouter();
   const ask = useConfirm();
   // Starts true when arriving to tailor, so the first paint is already the wait.
@@ -78,6 +80,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
    * what it answers.
    */
   const [asking, setAsking] = useState<{ instruction: string; question: string } | null>(null);
+  const [confirmTailor, setConfirmTailor] = useState(false);
   const [editsLeft, setEditsLeft] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -174,6 +177,19 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
    * `fired` covers the other double: React's development StrictMode runs every
    * effect twice, and a second run here is a second credit.
    */
+  /*
+   * A question arrives where the person was already typing, but a panel that
+   * looks the same as it did a second ago is easy to walk past — it was, the
+   * first time this shipped. So the page comes to them: the answer box scrolls
+   * into view and takes the caret, and the card itself glows once. The same
+   * three moves the "Ask it to fix this" link already makes.
+   */
+  useEffect(() => {
+    if (!asking) return;
+    composer.current?.scrollIntoView({ block: 'nearest' });
+    composer.current?.focus();
+  }, [asking]);
+
   const fired = useRef(false);
   useEffect(() => {
     if (!startTailor || fired.current) return;
@@ -639,7 +655,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                     take the first job's, silently, because it was first.
                   */}
                   {asking ? (
-                    <div className="flex flex-col gap-1.5 rounded border border-accent-line bg-ground-surface px-3 py-2.5">
+                    <div className="flex animate-[askedYou_900ms_ease-out] flex-col gap-1.5 rounded border border-accent-line bg-ground-surface px-3 py-2.5">
                       <span className="text-[13px] leading-snug text-ink">{asking.question}</span>
                       <span className="text-[12px] leading-snug text-ink-muted">
                         About &ldquo;{asking.instruction}&rdquo;
@@ -701,14 +717,53 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={tailor}
-                  disabled={busy || editing}
-                  className="w-full rounded border border-rule-field bg-ground-surface py-3 text-[13.5px] text-ink-prose transition hover:border-accent disabled:opacity-50"
-                >
-                  Tailor again · 1 credit
-                </button>
+                {/*
+                  * Tailoring again rebuilds from the profile, so every edit
+                  * made by hand since the last one is undone. That is the
+                  * design and it is right — but one click silently reversing
+                  * an afternoon's work is not. Ten edits went that way in
+                  * testing: a removed job came back, a skill came back, and
+                  * wording somebody had deliberately simplified reverted.
+                  *
+                  * Only asks when there is something to lose.
+                  */}
+                {confirmTailor ? (
+                  <div className="flex animate-[askedYou_900ms_ease-out] flex-col gap-2 rounded border border-flag-line bg-flag-bg px-3 py-2.5">
+                    <p className="text-[13px] leading-relaxed text-ink-prose">
+                      This rebuilds the resume from your profile.{' '}
+                      {editsSinceTailor === 1 ? 'The change you made' : `The ${editsSinceTailor} changes you made`} here
+                      will be undone.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmTailor(false);
+                          tailor();
+                        }}
+                        className="rounded bg-accent px-3 py-1.5 text-[12.5px] font-medium text-ground transition hover:bg-accent-hover"
+                      >
+                        Tailor again
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmTailor(false)}
+                        className="text-[12.5px] text-ink-muted underline underline-offset-2 transition hover:text-ink"
+                      >
+                        Keep my changes
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => (editsSinceTailor > 0 ? setConfirmTailor(true) : tailor())}
+                    disabled={busy || editing}
+                    className="w-full rounded border border-rule-field bg-ground-surface py-3 text-[13.5px] text-ink-prose transition hover:border-accent disabled:opacity-50"
+                  >
+                    Tailor again · 1 credit
+                  </button>
+                )}
                 {error ? <p className="text-[13px] text-flag">{error}</p> : null}
               </div>
             ) : error ? (

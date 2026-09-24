@@ -10,6 +10,7 @@ import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
 import { annotate, cutTargets, resolveTailored, unreadable } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
+import { asLines } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
@@ -331,9 +332,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
         ...surfaced.log,
         ...honest.log,
         ...fitted.log,
-        ...withoutUndoneClaims(toolInput.log ?? [], guarded.restored),
+        ...withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
       ],
-      warnings: [...surfaced.warnings, ...honest.warnings, ...fitted.warnings, ...(toolInput.warnings ?? [])],
+      warnings: [...surfaced.warnings, ...honest.warnings, ...fitted.warnings, ...asLines(toolInput.warnings)],
       // The column exists and nothing has ever read it back, so the model is
       // no longer asked to produce a number for it. `pageCount` is the real
       // one, and the only one anything reads.

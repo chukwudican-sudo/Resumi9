@@ -67,6 +67,21 @@ em.font-serif {
   to   { opacity: 1; }
 }
 
+/*
+ * A question that has just appeared, asking to be read.
+ *
+ * One pass and then it sits still. Somebody typed an instruction and the screen
+ * answered with a question instead of a change — without this the composer looks
+ * exactly as it did a second ago, and the question is easy to walk straight
+ * past, which is what happened the first time it shipped.
+ */
+@keyframes askedYou {
+  from { opacity: 0; box-shadow: 0 0 0 3px rgba(47, 93, 80, 0.30); }
+  60%  { opacity: 1; }
+  to   { opacity: 1; box-shadow: 0 0 0 3px rgba(47, 93, 80, 0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-\[fadeIn_180ms_ease-out\] { animation: none; }
+  .animate-\[askedYou_900ms_ease-out\] { animation: none; }
 }

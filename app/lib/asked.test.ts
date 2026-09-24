@@ -184,9 +184,10 @@ test('the instruction is kept verbatim, for the honesty check to read', () => {
 test('a removal aimed at a part, with nothing named, asks which one', () => {
   const question = asked('drop the second bullet').ask;
   assert.ok(question, 'it should ask rather than pick');
-  assert.match(question!, /Which one\?/);
-  assert.match(question!, /Droady/);
-  assert.match(question!, /Aegon/);
+  assert.match(question!, /Which entry/);
+  // No list of names. It said "you have" and then named some of them, which
+  // read as a complete list and was not one.
+  assert.doesNotMatch(question!, /Droady|Aegon/);
 });
 
 test('the same instruction with an entry named asks nothing', () => {

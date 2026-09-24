@@ -247,7 +247,12 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
     if (tied.length > 1) {
       ask = `Which one — ${listOf(tied, 'or')}?`;
     } else if (removal && aboutParts && named.length === 0 && everything.length > 1) {
-      ask = `Which one? You have ${listOf(everything.slice(0, 6))}.`;
+      /*
+       * No list of names. Listing them said "you have" and then named six of
+       * ten, which is false — and the entries are on the page beside the
+       * question anyway, so naming them was redundant as well as wrong.
+       */
+      ask = 'Which entry? Name the job or project.';
     } else if (!removal && MEANS_BOTH.test(words) && !aboutParts && named.length === 1) {
       ask = `Do you want ${named[0].grant.name} removed completely, or just shortened?`;
     }
