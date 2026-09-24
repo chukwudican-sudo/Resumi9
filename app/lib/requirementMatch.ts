@@ -80,6 +80,71 @@ export function matchRequirements(
 }
 
 /**
+ * The gaps still open after somebody edited the resume by hand.
+ *
+ * Both figures on the review panel — the match score and "they ask for 13
+ * things you have not mentioned" — were written by the tailor and then carried
+ * forward unchanged through every edit. So a resume could gain PyTorch by
+ * instruction and still be told PyTorch was missing, and a whole job could be
+ * removed without either number moving. On screen that reads as the app not
+ * having looked, which is exactly what was happening.
+ *
+ * Composed the same way the tailor composes it, so an edited resume and a
+ * freshly tailored one are measured by one rule:
+ *
+ *   - a gap the model named survives only while it is still literally absent,
+ *   - plus any requirement a literal check cannot now find.
+ *
+ * The model's own wording is kept where it survives ("Feature Engineering /
+ * Loss Function Design experience" says more than "feature engineering"), and
+ * a literal gap it already covers is not added twice.
+ */
+export function gapsAfterEdit(
+  carried: string[],
+  structure: ResumeStructure,
+  requirements: string[],
+): string[] {
+  const haystack = textOf(structure)
+    .map((t) => t.text)
+    .join('\n');
+  const onTheResume = (term: string) =>
+    term.trim() !== '' && waysOfWriting(term).some((way) => patternFor(way).test(haystack));
+
+  const kept = carried.filter((gap) => !onTheResume(gap));
+  const found = matchRequirements(structure, requirements).missing.filter(
+    (gap) => !kept.some((named) => named.toLowerCase().includes(gap.toLowerCase())),
+  );
+  return [...kept, ...found];
+}
+
+/**
+ * The match score moved by what the edit actually changed.
+ *
+ * The score is the MODEL's judgement — how well this resume reads against this
+ * posting — and an edit does not get one of those, because asking would put a
+ * second model call on a free, instant action. So the number is not recomputed;
+ * it is nudged, by the only part of it anybody can measure without asking.
+ *
+ * Closing one of twenty requirements moves it five points, opening one moves it
+ * back five. Deliberately modest: the alternative was a frozen number that had
+ * already been contradicted by the list of gaps printed directly beneath it,
+ * and a score that moves with its own evidence beats one that cannot move at
+ * all. When nothing measurable changed, neither does the score.
+ */
+export function rescore(
+  stored: number | null,
+  before: string[],
+  after: string[],
+  requirements: string[],
+): number | null {
+  if (stored === null || requirements.length === 0) return stored;
+  const closed = before.length - after.length;
+  if (closed === 0) return stored;
+  const moved = stored + (closed / requirements.length) * 100;
+  return Math.max(0, Math.min(100, Math.round(moved)));
+}
+
+/**
  * The requirement, its aliases, and its forms without a vendor prefix or plural.
  *
  * Exported because the guard needs the same reading of a technical term: it was

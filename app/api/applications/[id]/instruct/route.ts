@@ -4,6 +4,7 @@ import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '.
 import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { readInstruction } from '../../../../lib/asked';
 import { asLines } from '../../../../lib/changeLog';
+import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
 import { requireUserId } from '../../../../server/auth';
@@ -273,13 +274,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       );
     }
 
+    const requirements = (posting?.requirements as string[]) ?? [];
+    const carriedGaps = (current.missingRequirements as string[]) ?? [];
+    const gaps = gapsAfterEdit(carriedGaps, guarded.structure, requirements);
+
     const resumeId = await saveResume(userId, params.id, {
       structure: guarded.structure,
-      // An instruction changes wording, not how well the resume fits the job.
-      // INSTRUCT_TOOL returns neither of these, so without carrying them the
-      // match tile would go blank on every edit.
-      matchScore: current.matchScore,
-      missingRequirements: (current.missingRequirements as string[]) ?? [],
+      /*
+       * Measured again, against the resume this edit just produced.
+       *
+       * These were carried forward untouched on the reasoning that an edit
+       * changes wording rather than fit. It does not hold: an edit can add the
+       * exact tool a posting asked for, or delete the job that evidenced it.
+       * So the panel sat at 35/100 above a list of thirteen gaps that had
+       * stopped being true three edits earlier — the app's own account of the
+       * resume, contradicted by the resume next to it.
+       *
+       * No model call. The gap list is a literal check the app already owns,
+       * and the score is nudged by what that check found; see `rescore`.
+       */
+      matchScore: rescore(current.matchScore, carriedGaps, gaps, requirements),
+      missingRequirements: gaps,
       log: [
         `You asked: "${instruction}"`,
         /*
