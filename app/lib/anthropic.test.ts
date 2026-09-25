@@ -1,8 +1,10 @@
 import assert from 'node:assert';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import {
   CALL_CONFIG,
   DEADLINE_GOVERNED,
+  MAX_DURATION_S,
   NoToolUseError,
   REQUEST_BUDGET_MS,
   TruncatedError,
@@ -65,10 +67,39 @@ test('a deadline-governed call is never retried', () => {
 });
 
 test('the request budget leaves the platform room to answer', () => {
-  // maxDuration = 60 in every route. A budget at or above it is not a budget:
-  // the platform kill happens outside any catch, so no refund and no message.
-  assert.ok(REQUEST_BUDGET_MS < 60_000, 'budget must sit under maxDuration = 60');
-  assert.ok(REQUEST_BUDGET_MS >= 45_000, 'a budget this tight would stop work that would have finished');
+  // A budget at or above the ceiling is not a budget: the platform kill happens
+  // outside any catch, so no refund and no message. Ten seconds is what the
+  // route still has to do after the model answers — guard, measure, save.
+  assert.ok(
+    REQUEST_BUDGET_MS <= MAX_DURATION_S * 1000 - 10_000,
+    `a ${REQUEST_BUDGET_MS}ms budget under a ${MAX_DURATION_S}s ceiling leaves nothing to save the result with`,
+  );
+  // Measured: the model call alone takes 40-48s, and fitting a page needs two
+  // or three compiles after it at six seconds of headroom each.
+  assert.ok(REQUEST_BUDGET_MS >= 70_000, 'a budget this tight leaves no room to measure a page, let alone cut one');
+});
+
+test('the routes that budget declare the ceiling the budget assumes', () => {
+  /*
+   * Next.js reads `maxDuration` statically at build time, so it cannot be an
+   * import — which is exactly how a budget and a ceiling drift apart. They did
+   * once already: the tailor budgeted 52s while this file gave it a 45s
+   * per-attempt timeout, and the shorter leash won silently for a day.
+   */
+  const routes = [
+    'app/api/applications/[id]/tailor/route.ts',
+    'app/api/applications/[id]/instruct/route.ts',
+  ];
+  for (const route of routes) {
+    const source = readFileSync(new URL(`../../${route}`, import.meta.url), 'utf8');
+    const declared = /export const maxDuration = (\d+);/.exec(source);
+    assert.ok(declared, `${route} declares no maxDuration, so the platform default applies`);
+    assert.equal(
+      Number(declared[1]),
+      MAX_DURATION_S,
+      `${route} allows ${declared[1]}s while the budget is written for ${MAX_DURATION_S}s`,
+    );
+  }
 });
 
 test('every model the app calls has its own pricing entry', () => {

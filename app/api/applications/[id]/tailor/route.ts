@@ -28,7 +28,8 @@ import {
 } from '../../../../server/db/repository';
 import { capacityResponse, tailorToolFor, errorResponse, SERVICE_UNAVAILABLE } from '../../../claude/shared';
 
-export const maxDuration = 60;
+// Kept in step with MAX_DURATION_S by a test; Next.js needs a literal here.
+export const maxDuration = 120;
 
 interface TailorResult {
   structure: ResumeStructure;

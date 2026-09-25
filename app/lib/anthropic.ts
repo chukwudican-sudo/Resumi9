@@ -60,11 +60,38 @@ const MODEL = 'claude-sonnet-5';
  * 44-50s. It timed out on the median, and the error said "took longer than we
  * allow", which is how it read as a budget stop for a whole day.
  *
- * Sits a few seconds under `maxDuration = 60` so the budget runs out before the
- * platform kills the function — a kill happens outside any catch, so no refund
- * and no message.
+ * Sits well under `MAX_DURATION_S` so the budget runs out before the platform
+ * kills the function — a kill happens outside any catch, so no refund and no
+ * message.
+ *
+ * It was 52s, against a 60s ceiling, and that was too tight to do the work.
+ * Measured on real edits, the model call alone takes 40-48s of it. Fitting a
+ * resume to one page needs two or three compiles afterwards at six seconds of
+ * headroom each, so there was room for zero or one — which is why the page
+ * cutting that shipped for tailoring almost always measured without ever
+ * cutting, and why "keep it to one page" did nothing.
+ *
+ * Nothing gets slower: a resume still takes the twenty to forty seconds it
+ * takes, and the headroom is only spent when there is something to measure.
+ * What it costs is that a request which was always going to fail now takes up
+ * to two minutes to say so.
  */
-export const REQUEST_BUDGET_MS = 52_000;
+export const REQUEST_BUDGET_MS = 110_000;
+
+/**
+ * The ceiling the platform enforces, declared by the two routes that budget.
+ *
+ * Not imported by those routes — Next.js reads `maxDuration` statically at
+ * build time, so it has to be a literal in the file — which is exactly how a
+ * budget and a ceiling drift apart. A test holds them together instead.
+ *
+ * **This depends on Fluid Compute being on.** With it, Vercel allows 300s on
+ * every plan including Hobby; without it, Hobby caps at 60 and a function that
+ * runs longer is killed with no catch to report it. It has been the default
+ * for new projects for some time, but it is a project setting, so it is worth
+ * knowing that this number rests on it.
+ */
+export const MAX_DURATION_S = 120;
 
 /**
  * Per-kind model + budget. Keeps model choice out of the handlers.
@@ -88,8 +115,8 @@ export const CALL_CONFIG: Record<
 > = {
   extract: { model: MODEL, maxTokens: 5600, effort: 'low', timeoutMs: 40000, retries: 0 },
   extract_resume: { model: MODEL, maxTokens: 5600, effort: 'low', timeoutMs: 40000, retries: 0 },
-  tailor: { model: MODEL, maxTokens: 11200, effort: 'medium', timeoutMs: 55000, retries: 0 },
-  instruct: { model: MODEL, maxTokens: 11200, effort: 'medium', timeoutMs: 55000, retries: 0 },
+  tailor: { model: MODEL, maxTokens: 11200, effort: 'medium', timeoutMs: REQUEST_BUDGET_MS, retries: 0 },
+  instruct: { model: MODEL, maxTokens: 11200, effort: 'medium', timeoutMs: REQUEST_BUDGET_MS, retries: 0 },
   interview_turn: { model: MODEL, maxTokens: 2800, effort: 'low', timeoutMs: 25000, retries: 1 },
   compose: { model: MODEL, maxTokens: 11200, effort: 'medium', timeoutMs: 55000, retries: 0 },
   // Short input, short output, and it runs whenever a resume changes — so it is
@@ -105,8 +132,13 @@ export const CALL_CONFIG: Record<
   proofread: { model: MODEL, maxTokens: 2100, effort: 'low', timeoutMs: 25000, retries: 1 },
 };
 
-/** Kinds whose route hands `callClaude` a deadline. See the timeoutMs note. */
-export const DEADLINE_GOVERNED: UsageKind[] = ['tailor'];
+/**
+ * Kinds whose route hands `callClaude` a deadline. See the timeoutMs note.
+ *
+ * `instruct` was missing from here while passing one, so the rule that keeps a
+ * per-attempt timeout from preempting the budget was never checked for it.
+ */
+export const DEADLINE_GOVERNED: UsageKind[] = ['tailor', 'instruct'];
 
 export const HEALTH_CHECK_MODEL = CALL_CONFIG.tailor.model;
 

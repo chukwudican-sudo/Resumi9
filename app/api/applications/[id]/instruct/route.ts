@@ -23,7 +23,8 @@ import { capacityResponse, INSTRUCT_TOOL, errorResponse, SERVICE_UNAVAILABLE } f
 import { annotate, resolveTailored, unreadable } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
 
-export const maxDuration = 60;
+// Kept in step with MAX_DURATION_S by a test; Next.js needs a literal here.
+export const maxDuration = 120;
 
 /** Ten per tailor. Tailoring again gives you ten more. */
 const FREE_EDITS = 10;
