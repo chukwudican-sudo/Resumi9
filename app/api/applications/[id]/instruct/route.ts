@@ -3,7 +3,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
 import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { readInstruction } from '../../../../lib/asked';
-import { asLines } from '../../../../lib/changeLog';
+import { asLines, withoutOrderTalk } from '../../../../lib/changeLog';
+import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
@@ -282,7 +283,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     const asking = typeof toolInput.question === 'string' ? toolInput.question.trim() : '';
     if (asking && !toolInput.structure) {
-      return NextResponse.json({ question: asking, editsLeft: FREE_EDITS - spent });
+      // Without the list of entries it read back off its own prompt. The app
+      // stopped naming them; the model started.
+      return NextResponse.json({ question: tidyQuestion(asking, structure), editsLeft: FREE_EDITS - spent });
     }
 
     const resolved = resolveTailored(toolInput.structure, index);
@@ -345,6 +348,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }
       : guarded.structure;
 
+    /** Order talk is only the app's to make, and only when there was a move. */
+    const quiet = (lines: string[]) => (move ? withoutOrderTalk(lines) : lines);
+
     const requirements = (posting?.requirements as string[]) ?? [];
     const carriedGaps = (current.missingRequirements as string[]) ?? [];
     const gaps = gapsAfterEdit(carriedGaps, edited, requirements);
@@ -384,9 +390,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         // The model's own account comes last and is the only one nobody
         // verified — so a line claiming it removed something the guard put back
         // does not survive to sit beside the notice saying otherwise.
-        ...withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
+        /*
+         * The model's own account comes last, and twice filtered when the app
+         * arranged the sections: it does not get to claim a removal the guard
+         * undid, and it does not get to narrate the ordering it had no part in.
+         */
+        ...quiet(withoutUndoneClaims(asLines(toolInput.log), guarded.restored)),
       ],
-      warnings: [...surfaced.warnings, ...honest.warnings, ...asLines(toolInput.warnings)],
+      warnings: [...surfaced.warnings, ...honest.warnings, ...quiet(asLines(toolInput.warnings))],
       // Carried, not asked for. The model's guess was wrong every time it was
       // checked — "slightly over 1 page" for a resume that filled two — so the
       // tool no longer requests it. A real measurement replaces this later.

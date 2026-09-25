@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { asLines, mendSplitLines, storedLines } from './changeLog';
+import { asLines, mendSplitLines, storedLines, withoutOrderTalk } from './changeLog';
 
 // ── asLines ────────────────────────────────────────────────────────────────
 //
@@ -101,4 +101,36 @@ test('an undamaged log is unchanged', () => {
 test('a log that was never a list at all', () => {
   assert.deepEqual(storedLines('One sentence.'), ['One sentence.']);
   assert.deepEqual(storedLines(null), []);
+});
+
+// ── withoutOrderTalk ───────────────────────────────────────────────────────
+//
+// Both of these are real, from the first live run after section moves shipped
+// — one in the change list, one filed as a warning.
+
+test('the model narrating the app’s layout is dropped', () => {
+  const lines = [
+    'Noted your request to move Skills below Education — section placement is handled by the app’s layout, so no content was changed.',
+  ];
+  assert.deepEqual(withoutOrderTalk(lines), []);
+});
+
+test('the same thing filed as a warning is dropped', () => {
+  const warnings = [
+    'Section order on the page is controlled by the app, not by the content structure, so no field changed here — the Skills section should appear below Education once rendered.',
+  ];
+  assert.deepEqual(withoutOrderTalk(warnings), []);
+});
+
+test('what the model actually did is kept', () => {
+  const lines = [
+    'Shortened the four MealApp bullets, keeping every number.',
+    'Removed "Python" from the Languages skills group, as instructed.',
+  ];
+  assert.deepEqual(withoutOrderTalk(lines), lines);
+});
+
+test('a warning worth reading survives', () => {
+  const warnings = ['Check the Droady dates before you send this — they overlap with Kudi Kitchen.'];
+  assert.deepEqual(withoutOrderTalk(warnings), warnings);
 });

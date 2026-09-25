@@ -62,6 +62,31 @@ export function storedLines(value: unknown): string[] {
 }
 
 /**
+ * Lines about where sections sit, dropped.
+ *
+ * Run only when the app itself moved a section, so the arrangement is already
+ * reported in the app's own words and anything the model adds is either a
+ * repetition or a description of the machinery:
+ *
+ *     Noted your request to move Skills below Education — section placement is
+ *     handled by the app's layout, so no content was changed.
+ *
+ * It put a second one in the WARNINGS, which are meant to be things to check
+ * before sending a resume to an employer. Neither was a lie; both were the app
+ * talking about itself to somebody who wanted to know what their resume says.
+ *
+ * In code rather than in the prompt because the prompt was tried first: a line
+ * instructing the model to say nothing about order, written the same day, was
+ * ignored on that same run.
+ */
+export function withoutOrderTalk(lines: string[]): string[] {
+  const SECTION = /\bsections?\b/i;
+  const ABOUT_ORDER =
+    /\b(?:order(?:ing|ed)?|placement|placed|position(?:ed|ing)?|arrang\w+|layout|sequence|reorder\w*|rendered|above|below|top|bottom|first|last)\b/i;
+  return lines.filter((line) => !(SECTION.test(line) && ABOUT_ORDER.test(line)));
+}
+
+/**
  * A sentence that was stored one letter per row, put back together.
  *
  * Repair for rows written before `asLines` existed. Only runs of single
