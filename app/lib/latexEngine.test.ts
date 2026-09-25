@@ -177,6 +177,30 @@ function run() {
     );
   }
 
+  /*
+   * (i) The f-ligatures stay off.
+   *
+   * With them on, a compiled PDF's own ToUnicode table maps the "ffi" glyph to
+   * U+FB00 followed by "i" — so "officer" extracts as "o" + the ff ligature +
+   * "icer", and an employer's system searching for "Chief Financial Officer"
+   * finds nothing. Also office, efficient, difficulty, staffing, traffic.
+   *
+   * Invisible on screen, because PDF readers normalise the ligature back to
+   * "ff" before showing it. That is why it survived this long on a product
+   * whose whole job is putting a posting's own words onto a resume — and why
+   * it is asserted here rather than left to somebody noticing.
+   */
+  const preamble = renderResumeLatex(fixture);
+  assert.ok(preamble.includes('\\usepackage{fontspec}'), 'fontspec is what makes the ligature switch reachable');
+  assert.ok(
+    /\\setmainfont\{lmroman10-regular\.otf\}/.test(preamble),
+    'the main font must be named by file — \\setmainfont{Latin Modern Roman} does not resolve under tectonic',
+  );
+  assert.ok(
+    /Ligatures\s*=\s*NoCommon/.test(preamble),
+    'the f-ligatures must stay off, or "officer" stops matching "officer"',
+  );
+
   console.log('latexEngine.test.ts: all assertions passed');
 }
 

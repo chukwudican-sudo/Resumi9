@@ -27,7 +27,35 @@ const PREAMBLE = String.raw`%-------------------------
 \usepackage{tabularx}
 % ponytail: dropped \input{glyphtounicode} + \pdfgentounicode=1 — those are
 % pdftex-only primitives, and we compile with tectonic (XeTeX engine), which
-% errors on them. Cost: slightly weaker ATS glyph->unicode mapping.
+% errors on them.
+%
+% That note used to end "cost: slightly weaker ATS glyph->unicode mapping",
+% which understated it. The map is present under XeTeX and is WRONG for one
+% glyph. Read out of a compiled PDF's own ToUnicode table:
+%
+%     glyph <007A> -> U+0066 U+0066   = "ff"   correct
+%     glyph <007D> -> U+0066 U+0069   = "fi"   correct
+%     glyph <007B> -> U+FB00 U+0069   = "ffi"  WRONG — a ligature character
+%
+% So "officer" extracts as "o" + the ff ligature + "icer", and an employer's
+% system searching for "Chief Financial Officer" does not match it. Same for
+% office, efficient, efficiency, difficult, staffing, traffic, sufficient. It
+% is invisible on screen: PDF readers normalise the ligature back to "ff",
+% which is why it survived this long on a product whose whole job is putting
+% a posting's own words onto a resume.
+%
+% Turning the f-ligatures off fixes the one broken mapping. It also gives up
+% the three that were correct, which is a real if small typographic loss —
+% worth it, because this document is read by machines before it is read by
+% anybody. Named by file rather than by family: \setmainfont{Latin Modern
+% Roman} does not resolve under tectonic.
+\usepackage{fontspec}
+\setmainfont{lmroman10-regular.otf}[
+  BoldFont=lmroman10-bold.otf,
+  ItalicFont=lmroman10-italic.otf,
+  BoldItalicFont=lmroman10-bolditalic.otf,
+  Ligatures=NoCommon,
+]
 
 
 %----------FONT OPTIONS----------
