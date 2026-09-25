@@ -596,6 +596,56 @@ export function withSectionRemoved(sections: ResumeSection[], key: string): Resu
   return sections.filter((s) => s.key !== key);
 }
 
+/** Where a moved section lands. */
+export type Landing = 'before' | 'after' | 'start' | 'end';
+
+/**
+ * The plan with one section moved, or null when the move cannot be made.
+ *
+ * Takes the PLANNED order rather than the stored list, and this is the whole
+ * point of it. A stored list does not have to be complete — the summary is
+ * routinely absent from it and placed by the rank table at print time — so a
+ * move applied to the stored list cannot move the section somebody is actually
+ * looking at. "Move the summary below education" was a no-op for exactly that
+ * reason: there was no summary in the list to move.
+ *
+ * It returns the order in full, every section written down explicitly. From
+ * then on that resume's order is stated rather than inferred, which is what
+ * makes the move survive the next read: two places deciding order is how a
+ * section somebody deliberately placed drifts back to where convention wanted
+ * it. Empty sections are kept, as `planSections` keeps them — the renderer
+ * drops them, and the rail needs them to offer what has not been filled in.
+ */
+export function withSectionMoved(
+  planned: PlannedSection[],
+  key: string,
+  where: Landing,
+  target: string | null,
+): ResumeSection[] | null {
+  const from = planned.findIndex((s) => s.key === key);
+  if (from < 0) return null;
+  if ((where === 'before' || where === 'after') && (!target || target === key)) return null;
+
+  const rest = planned.filter((s) => s.key !== key);
+  const moved = planned[from];
+
+  let at: number;
+  if (where === 'start') at = 0;
+  else if (where === 'end') at = rest.length;
+  else {
+    const beside = rest.findIndex((s) => s.key === target);
+    if (beside < 0) return null;
+    at = where === 'before' ? beside : beside + 1;
+  }
+
+  const order = [...rest.slice(0, at), moved, ...rest.slice(at)];
+  // Nothing actually moved. Saving a version whose only change is "we put it
+  // back where it already was" is worse than saying so.
+  if (order.every((s, i) => s.key === planned[i].key)) return null;
+
+  return order.map((s) => ({ key: s.key, label: s.label, shape: s.shape }));
+}
+
 /**
  * A stable key for a section named by whatever the resume called it.
  *

@@ -5,6 +5,8 @@ import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../li
 import { readInstruction } from '../../../../lib/asked';
 import { asLines } from '../../../../lib/changeLog';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
+import { moveLine, readMove } from '../../../../lib/sectionMove';
+import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
 import { requireUserId } from '../../../../server/auth';
@@ -24,6 +26,16 @@ export const maxDuration = 60;
 
 /** Ten per tailor. Tailoring again gives you ten more. */
 const FREE_EDITS = 10;
+
+/**
+ * Said whenever an order is changed, because the order does not travel.
+ *
+ * A move applies to this resume. Tailoring again rebuilds from the profile,
+ * where no such order is recorded, so it comes back in the usual arrangement —
+ * and somebody who deliberately placed a section would otherwise discover that
+ * days later with no idea what undid it.
+ */
+const ORDER_IS_LOCAL = 'This order applies to this resume. Tailoring again rebuilds from your profile and puts it back.';
 
 interface InstructResult {
   /** Absent when the model asked a question instead of making the change. */
@@ -154,6 +166,47 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ question: asked.ask, editsLeft: FREE_EDITS - spent });
   }
 
+  /*
+   * A section move, read and carried out by the app.
+   *
+   * The model is never consulted about order. Asked to move a section it has
+   * no field to answer with, so it returned the whole resume instead — in a
+   * shape nothing could resolve, which is the edit that deleted somebody's
+   * coursework line. The order is arithmetic on a list; nothing is gained by
+   * asking a model to do it, and a bullet was lost by asking.
+   *
+   * `null` from the mover means the move cannot be made — a section that is
+   * not there, or one already where it was asked to go — and the sentence goes
+   * on to the model as if no move had been read.
+   */
+  const read = readMove(instruction, structure, answer);
+  if (read && 'ask' in read) {
+    if (!answer) return NextResponse.json({ question: read.ask, editsLeft: FREE_EDITS - spent });
+  }
+  const move = read && 'move' in read ? read.move : null;
+  const reordered = move ? withSectionMoved(planSections(structure), move.key, move.where, move.target) : null;
+
+  /*
+   * Nothing but a move: no model call at all.
+   *
+   * Instant, free, and — more to the point — an instruction that was only ever
+   * about order cannot touch a word of the resume, because nothing capable of
+   * rewriting one has run. Earning `only` is deliberately hard; anything else
+   * in the sentence and this is skipped.
+   */
+  if (move && reordered && move.only) {
+    const resumeId = await saveResume(userId, params.id, {
+      structure: { ...structure, sections: reordered },
+      matchScore: current.matchScore,
+      missingRequirements: (current.missingRequirements as string[]) ?? [],
+      log: [`You asked: "${instruction}"`, moveLine(move), ORDER_IS_LOCAL],
+      warnings: [],
+      estimatedPages: current.estimatedPages,
+      mode: 'instructed',
+    });
+    return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
+  }
+
   const said = [
     `The person has asked for one change: "${instruction}"`,
     question ? `You asked them: "${question}"` : '',
@@ -274,12 +327,30 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       );
     }
 
+    /*
+     * The move, applied after the guard rather than before it.
+     *
+     * The guard copies `sections` from the source unconditionally, which is
+     * what keeps the model out of the ordering — so a move written before it
+     * would be overwritten by the guard a moment later. Recomputed against the
+     * guarded structure too, because the guard may have restored a section the
+     * model dropped, and the order has to cover what is actually there.
+     */
+    const edited = move
+      ? {
+          ...guarded.structure,
+          sections:
+            withSectionMoved(planSections(guarded.structure), move.key, move.where, move.target) ??
+            guarded.structure.sections,
+        }
+      : guarded.structure;
+
     const requirements = (posting?.requirements as string[]) ?? [];
     const carriedGaps = (current.missingRequirements as string[]) ?? [];
-    const gaps = gapsAfterEdit(carriedGaps, guarded.structure, requirements);
+    const gaps = gapsAfterEdit(carriedGaps, edited, requirements);
 
     const resumeId = await saveResume(userId, params.id, {
-      structure: guarded.structure,
+      structure: edited,
       /*
        * Measured again, against the resume this edit just produced.
        *
@@ -307,6 +378,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          * row, so without this line nothing anywhere remembers it happened.
          */
         ...(answer ? [`We asked: ${question || 'which one?'} You said: "${answer}"`] : []),
+        ...(move ? [moveLine(move), ORDER_IS_LOCAL] : []),
         ...surfaced.log,
         ...honest.log,
         // The model's own account comes last and is the only one nobody
