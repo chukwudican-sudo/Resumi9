@@ -664,8 +664,22 @@ export function validateTailored(
     // line, an absent field reads as a deletion and every single tailor reports
     // "your certifications were missing and have been put back". These fields
     // were optional even before that, so an omission was never proof of a loss.
-    if (from === undefined) return src;
-    const out = asList<string>(from).filter((v) => typeof v === 'string' && v.trim());
+    /*
+     * `returned`, and this is the whole bug.
+     *
+     * The parameter was renamed to `returned` precisely so it would not shadow
+     * the `from` label in the enclosing scope — and the body was left reading
+     * `from`. That is a string, never undefined, so the early return above
+     * never fired; `asList` of a string is an empty list, so `out` was always
+     * empty and EVERY item counted as missing. The result was a line on every
+     * tailor, for every person with certifications or awards, saying they had
+     * been dropped and restored when nothing had happened to them at all.
+     *
+     * The type system could not help: both are in scope, both are readable,
+     * and one of them happens to be a string.
+     */
+    if (returned === undefined) return src;
+    const out = asList<string>(returned).filter((v) => typeof v === 'string' && v.trim());
     const missing = src.filter((v) => !out.some((o) => norm(o) === norm(v)));
     if (!missing.length) return out;
     repairs.push({

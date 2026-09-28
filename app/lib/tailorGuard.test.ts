@@ -345,6 +345,53 @@ test('certifications the person does have are kept, and a dropped one comes back
   ]);
 });
 
+test('certifications that came back untouched are not reported as restored', () => {
+  /*
+   * The false positive this file's header warns about, and it shipped.
+   *
+   * `keepList` takes its parameter as `returned` — renamed so it would not
+   * shadow the `from` label outside — and the body was left reading `from`.
+   * That is a string, never undefined, and a list made from a string is empty,
+   * so every item counted as missing. EVERY tailor, for everybody holding a
+   * certification or an award, ended with a line saying theirs had been dropped
+   * and put back when nothing had touched them.
+   *
+   * Nothing caught it because the only test here dropped an item and checked it
+   * came back — which the broken version did, by restoring everything.
+   */
+  const withCerts = {
+    ...SOURCE,
+    certifications: ['AWS Certified Cloud Practitioner', 'CFA Level I'],
+    awards: ['Dean\'s List'],
+  };
+  const tailored = validateTailored(withCerts, { ...withCerts });
+
+  assert.deepEqual(tailored.structure.certifications, ['AWS Certified Cloud Practitioner', 'CFA Level I']);
+  assert.deepEqual(tailored.structure.awards, ["Dean's List"]);
+  assert.deepEqual(tailored.repairs, [], 'nothing was dropped, so nothing is claimed');
+});
+
+test('a list the tailor never mentioned is kept without comment', () => {
+  // Optional fields, and an omission was never proof of a loss.
+  const withCerts = { ...SOURCE, certifications: ['CFA Level I'] };
+  const { certifications, ...silent } = withCerts;
+  const tailored = validateTailored(withCerts, silent as typeof withCerts);
+
+  assert.deepEqual(tailored.structure.certifications, ['CFA Level I']);
+  assert.deepEqual(tailored.repairs, []);
+});
+
+test('a reordered list is kept in the order the tailor chose', () => {
+  const withCerts = { ...SOURCE, certifications: ['AWS Certified Cloud Practitioner', 'CFA Level I'] };
+  const tailored = validateTailored(withCerts, {
+    ...withCerts,
+    certifications: ['CFA Level I', 'AWS Certified Cloud Practitioner'],
+  });
+
+  assert.deepEqual(tailored.structure.certifications, ['CFA Level I', 'AWS Certified Cloud Practitioner']);
+  assert.deepEqual(tailored.repairs, [], 'reordering is the tailor\'s to decide');
+});
+
 // ── a resume that never arrived ────────────────────────────────────────────
 //
 // A forced tool call guarantees a tool call, not the shape inside it. One real
