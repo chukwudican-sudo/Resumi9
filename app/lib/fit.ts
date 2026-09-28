@@ -36,6 +36,21 @@ import type { ResumeStructure } from './types';
 const SECTIONS = ['experience', 'projects'] as const;
 type Section = (typeof SECTIONS)[number];
 
+/**
+ * The fewest bullets trimming may leave under an entry.
+ *
+ * Two, not one. One bullet per entry fits more resumes — measured, it was the
+ * only thing that fitted one of ten — but it produces a page where nothing has
+ * any depth, every role reduced to a single line. Somebody reading that learns
+ * less than from a shorter resume with real detail on the roles that stayed.
+ *
+ * Keeping the heading and deleting all its bullets was considered and rejected:
+ * it is a real convention for decade-old roles, and it is not what a student
+ * resume does. A project reduced to a name and a stack line reads as filler,
+ * and an employer would rather see it left off.
+ */
+const MIN_BULLETS = 2;
+
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
   target: number;
@@ -102,7 +117,27 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
     experience: (structure.experience ?? []).map((entry) => `${norm(entry.org)}|${norm(entry.dates)}`),
     projects: (structure.projects ?? []).map((entry) => `${norm(entry.name)}|${norm(entry.dates)}`),
   };
+  // What to call an entry the APP decided to drop. The ranking supplies its own
+  // wording; these are for the cuts it never proposed.
+  const label: Record<Section, string[]> = {
+    experience: (structure.experience ?? []).map((entry) => entry.org || entry.title || 'a role'),
+    projects: (structure.projects ?? []).map((entry) => entry.name || 'a project'),
+  };
   const gone: Record<Section, Set<number>> = { experience: new Set(), projects: new Set() };
+
+  /**
+   * Whether this entry may go, given what has already gone.
+   *
+   * Two floors. A resume with no work history is not a shorter resume — that
+   * one was always here. The second was not, and the ranking could walk
+   * straight through it: dropping every project in turn left a Projects heading
+   * over nothing, or over one entry whose bullets had been trimmed away. A
+   * section survives only while something under it still says what it was.
+   */
+  const mayDrop = (section: Section, at: number): boolean => {
+    if (section === 'experience' && identity.experience.length - gone.experience.size <= 1) return false;
+    return remaining[section].some((bullets, i) => i !== at && !gone[section].has(i) && bullets.length > 0);
+  };
 
   const takeEntry = (target: Extract<CutTarget, { kind: 'entry' }>): ResolvedCut | null => {
     const section = target.section;
@@ -110,9 +145,7 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
     const key = `${norm(target.name)}|${norm(target.dates)}`;
     const at = identity[section].findIndex((k, i) => k === key && !gone[section].has(i));
     if (at === -1) return null;
-    // The floor. A resume with no work history is not a shorter resume, and
-    // this is the one thing the ranking is not allowed to talk the app into.
-    if (section === 'experience' && identity.experience.length - gone.experience.size <= 1) return null;
+    if (!mayDrop(section, at)) return null;
     gone[section].add(at);
     return { section, index: at, text: null, name: target.name };
   };
@@ -122,8 +155,10 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
       for (let i = 0; i < remaining[section].length; i += 1) {
         if (gone[section].has(i)) continue;
         const list = remaining[section][i];
-        // An entry keeps its last bullet.
-        if (list.length <= 1) continue;
+        // An entry is never trimmed below the floor. An entry that arrived with
+        // fewer is left exactly as it is — the floor stops trimming, it does
+        // not pad.
+        if (list.length <= MIN_BULLETS) continue;
         const at = list.indexOf(text);
         if (at === -1) continue;
         list.splice(at, 1);
@@ -138,6 +173,58 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
     const cut = target.kind === 'entry' ? takeEntry(target) : takeBullet(target.text);
     if (cut) usable.push(cut);
   }
+
+  /*
+   * Past the end of the ranking.
+   *
+   * The model names a handful of things and stops, and the app used to stop
+   * with it: every cut applied, still two pages, everything put back, and a
+   * message saying it could not be done. Measured on ten real resumes, three
+   * of them needed more than the ranking offered — including both that
+   * prompted this work.
+   *
+   * Order is everything here, because the search below takes PREFIXES: the
+   * shortest one that fits wins, so whatever is appended first is what gets
+   * used first. Bullets before entries, and within each, the least relevant
+   * entry before the most.
+   *
+   * "Least relevant" is the tailor's own ordering. It puts the strongest
+   * evidence for this posting first, so walking from the end is walking from
+   * the weakest — no second opinion needed, and no ranking of our own invented.
+   */
+  const weakestFirst = (section: Section) => {
+    const out: number[] = [];
+    for (let i = remaining[section].length - 1; i >= 0; i -= 1) if (!gone[section].has(i)) out.push(i);
+    return out;
+  };
+
+  // Bullets, down to the floor. Nothing here can empty an entry.
+  for (const section of SECTIONS) {
+    for (const i of weakestFirst(section)) {
+      const list = remaining[section][i];
+      while (list.length > MIN_BULLETS) {
+        usable.push({ section, index: i, text: list[list.length - 1] });
+        list.pop();
+      }
+    }
+  }
+
+  /*
+   * Then whole entries, weakest first.
+   *
+   * Two floors, and the second is the one that needed stating. A section may
+   * not be reduced to a heading over a single entry that has nothing under it:
+   * an earlier draft of this allowed exactly that, and a Projects section
+   * printing one bare title line is not a shorter resume, it is a worse one.
+   */
+  for (const section of SECTIONS) {
+    for (const i of weakestFirst(section)) {
+      if (!mayDrop(section, i)) continue;
+      gone[section].add(i);
+      usable.push({ section, index: i, text: null, name: label[section][i] });
+    }
+  }
+
   return usable;
 }
 
@@ -272,7 +359,17 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
     return {
       ...unchanged,
       pages,
-      warnings: [`${tooLong} Cutting the least relevant parts was not enough to get there, so nothing was cut.`],
+      /*
+       * Everything the app is allowed to cut, and it still does not fit.
+       *
+       * The full resume is kept rather than a shortened one that breaks the
+       * rule anyway — and the message says what to do about it, because
+       * "nothing was cut" left somebody staring at a rule their resume cannot
+       * meet with no idea what to try next.
+       */
+      warnings: [
+        `${tooLong} Even cutting everything least relevant to this posting, it will not fit — there is too much on it. Two pages, or take something off yourself.`,
+      ],
     };
   }
 

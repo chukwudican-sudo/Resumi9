@@ -12,6 +12,12 @@ import type { ResumeStructure } from './types';
  * numbers it gets back, including the ones a real compiler will not hand you on
  * demand — a measurement that fails, a resume that will not shrink however much
  * goes.
+ *
+ * Entries carry four bullets because trimming stops at two. Sized for the old
+ * floor of one, every entry here sat at or under the new one and nothing could
+ * be trimmed at all — so the tests passed on the wrong behaviour. MealApp keeps
+ * its single bullet on purpose: the floor stops trimming, it does not pad.
+ * Twenty-one lines in total, at two per heading.
  */
 const RESUME: ResumeStructure = {
   name: 'Chukwudi Alex',
@@ -20,11 +26,11 @@ const RESUME: ResumeStructure = {
     { school: 'Ontario Tech University', location: 'Oshawa, ON', degree: 'BEng', dates: 'Sep 2023 – 2028', bullets: ['Relevant coursework: Data Structures'] },
   ],
   experience: [
-    { title: 'Software Engineer', org: 'Droady', location: 'San Francisco, CA', dates: 'Nov 2025 – May 2026', bullets: ['job one', 'job two', 'job three'] },
-    { title: 'Server', org: 'Kudi Kitchen', location: 'Oshawa, ON', dates: 'Jan 2024 – Aug 2024', bullets: ['kudi one', 'kudi two'] },
+    { title: 'Software Engineer', org: 'Droady', location: 'San Francisco, CA', dates: 'Nov 2025 – May 2026', bullets: ['job one', 'job two', 'job three', 'job four'] },
+    { title: 'Server', org: 'Kudi Kitchen', location: 'Oshawa, ON', dates: 'Jan 2024 – Aug 2024', bullets: ['kudi one', 'kudi two', 'kudi three', 'kudi four'] },
   ],
   projects: [
-    { name: 'FraudWatch', tech: 'Java', dates: 'Aug 2026', bullets: ['project one', 'project two'] },
+    { name: 'FraudWatch', tech: 'Java', dates: 'Aug 2026', bullets: ['project one', 'project two', 'project three', 'project four'] },
     { name: 'MealApp', tech: 'React', dates: 'Feb 2025', bullets: ['meal one'] },
   ],
   skills: [{ category: 'Languages', items: 'Java, TypeScript' }],
@@ -84,11 +90,11 @@ test('a resume already within target is measured once and left alone', async () 
 });
 
 test('an over-long resume loses the fewest bullets that reach the target', async () => {
-  // 16 lines at 14 a page is two pages; dropping two bullets reaches 14.
+  // 21 lines at 19 a page is two pages; dropping two bullets reaches 19.
   const result = await fitToPages(RESUME, {
     target: 1,
-    cuts: [cut('meal one'), cut('kudi two'), cut('project two'), cut('job three')],
-    measure: byLines(14).measure,
+    cuts: [cut('meal one'), cut('kudi four'), cut('project four'), cut('job four')],
+    measure: byLines(19).measure,
     affords: always,
   });
 
@@ -106,12 +112,14 @@ test('a whole project is dropped when bullets alone cannot get there', async () 
     target: 1,
     cuts: [
       drop('projects', 'MealApp', 'Feb 2025'),
-      cut('project two'),
+      cut('project four'),
+      cut('job four'),
       cut('job three'),
-      cut('job two'),
-      cut('kudi two'),
+      cut('kudi four'),
     ],
-    measure: byLines(10).measure,
+    // 21 lines. Every trim the floor allows reaches 15 — still two pages at 14
+    // a page — so the entry has to go for this to fit at all.
+    measure: byLines(14).measure,
     affords: always,
   });
 
@@ -145,8 +153,8 @@ test('the last job is never dropped, however it is ranked', async () => {
 test('an entry that is not on the resume is skipped', async () => {
   const result = await fitToPages(RESUME, {
     target: 1,
-    cuts: [drop('projects', 'A project they deleted', '2019'), cut('project two'), cut('job three')],
-    measure: byLines(14).measure,
+    cuts: [drop('projects', 'A project they deleted', '2019'), cut('project four'), cut('job four')],
+    measure: byLines(19).measure,
     affords: always,
   });
 
@@ -167,47 +175,56 @@ test('cuts that never reach the target are all put back, and said so', async () 
   assert.deepEqual(bulletsOf(result.structure), bulletsOf(RESUME));
   assert.deepEqual(result.log, []);
   assert.match(result.warnings[0], /runs to 2 pages and your rules ask for one page/);
-  assert.match(result.warnings[0], /nothing was cut/);
+  assert.match(result.warnings[0], /will not fit/);
+  assert.match(result.warnings[0], /Two pages, or take something off yourself/);
 });
 
-test('an entry never loses its last bullet', async () => {
-  // Every bullet is offered and no entry is. Each of the four must still have
-  // one, or the resume grows a heading with nothing under it — which the guard
-  // would have caught, except the guard has already run by now.
+test('an entry is never trimmed below two bullets', async () => {
+  // Every bullet is offered and no entry is. One bullet apiece fits more
+  // resumes — measured, it was the only thing that fitted one real resume in
+  // ten — but it leaves a page where nothing has any depth.
+  //
+  // 21 lines; the six trims the floor allows reach 15, which fits at 15 a page.
   const result = await fitToPages(RESUME, {
-    target: 2,
+    target: 1,
     cuts: bulletsOf(RESUME).map(cut),
-    measure: byLines(6).measure,
+    measure: byLines(15).measure,
     affords: always,
   });
 
-  for (const entry of [...result.structure.experience, ...result.structure.projects]) {
-    assert.equal(entry.bullets.length, 1, `${JSON.stringify(entry.bullets)} should be one bullet`);
+  assert.equal(result.pages, 1);
+  // Which two survive is the ranking's business and is covered by the next
+  // test; here every entry that started above the floor must land on it.
+  for (const entry of [...result.structure.experience, result.structure.projects[0]]) {
+    assert.equal(entry.bullets.length, 2, `${JSON.stringify(entry.bullets)} should be two bullets`);
   }
+  assert.deepEqual(
+    result.structure.projects[1].bullets,
+    ['meal one'],
+    'the floor stops trimming, it does not pad an entry that arrived with fewer',
+  );
 });
 
-test('the bullet an entry keeps is its most relevant one', async () => {
+test('the bullets an entry keeps are its most relevant ones', async () => {
   // Falls out of spending the ranking in order rather than being enforced: the
-  // cuts are least-relevant-first, so the one that survives the "never empty an
-  // entry" rule is the last one the ranking would have reached.
+  // cuts are least-relevant-first, so what survives the floor is what the
+  // ranking would have reached last.
   const result = await fitToPages(RESUME, {
-    target: 2,
-    cuts: [cut('job three'), cut('job two'), cut('job one')],
-    // Only Droady's bullets are on offer, so two cuts is all there is. At 6
-    // lines a page even those two cannot reach the target, the loop rightly
-    // puts everything back, and nothing is learned about which one survives.
-    measure: byLines(7).measure,
+    target: 1,
+    cuts: [cut('job four'), cut('job three'), cut('job two'), cut('job one')],
+    // 21 lines; Droady's two allowed trims reach 19, which fits at 19 a page.
+    measure: byLines(19).measure,
     affords: always,
   });
 
-  assert.deepEqual(result.structure.experience[0].bullets, ['job one']);
+  assert.deepEqual(result.structure.experience[0].bullets, ['job one', 'job two']);
 });
 
 test('education and skills are never cut, even when named', async () => {
   const result = await fitToPages(RESUME, {
     target: 1,
-    cuts: [cut('Relevant coursework: Data Structures'), cut('project two'), cut('job three')],
-    measure: byLines(14).measure,
+    cuts: [cut('Relevant coursework: Data Structures'), cut('project four'), cut('job four')],
+    measure: byLines(19).measure,
     affords: always,
   });
 
@@ -220,8 +237,8 @@ test('a bullet that is no longer on the resume is skipped, not counted as a cut'
   // person's own sentence back in its place since.
   const result = await fitToPages(RESUME, {
     target: 1,
-    cuts: [cut('a sentence that was reverted'), cut('project two'), cut('job three')],
-    measure: byLines(14).measure,
+    cuts: [cut('a sentence that was reverted'), cut('project four'), cut('job four')],
+    measure: byLines(19).measure,
     affords: always,
   });
 
@@ -253,7 +270,7 @@ test('budget running out mid-search still saves a version that fits', async () =
   const meter = byLines(12);
   const result = await fitToPages(RESUME, {
     target: 1,
-    cuts: [drop('projects', 'MealApp', 'Feb 2025'), cut('job three'), cut('kudi two'), cut('project two')],
+    cuts: [drop('projects', 'MealApp', 'Feb 2025'), cut('job four'), cut('kudi four'), cut('project four')],
     measure: async (s) => {
       allowed -= 1;
       return meter.measure(s);
@@ -294,4 +311,62 @@ test('an over-long resume with nothing safe to cut says so', async () => {
 
   assert.deepEqual(result.structure.experience[0].bullets, ['the only one']);
   assert.match(result.warnings[0], /nothing safe to cut/);
+});
+
+test('a resume of one job and one project is never cut into something broken', async () => {
+  /*
+   * The shape a first user is most likely to have, and the one the floors bind
+   * on immediately: the single job may not go, and the single project may not
+   * go either while it is the only thing holding its section up.
+   *
+   * Measured separately on a real compile, this shape needs roughly 38 bullets
+   * across the two entries before it even reaches a second page — so in
+   * practice it never arrives here at all. It is written down because "it
+   * cannot happen" is exactly the assumption worth a test.
+   */
+  const minimal: ResumeStructure = {
+    ...RESUME,
+    experience: [{ ...RESUME.experience[0], bullets: ['job one', 'job two', 'job three', 'job four'] }],
+    projects: [{ ...RESUME.projects[0], bullets: ['project one', 'project two', 'project three', 'project four'] }],
+  };
+
+  const result = await fitToPages(minimal, {
+    target: 1,
+    cuts: [
+      drop('experience', 'Droady', 'Nov 2025 – May 2026'),
+      drop('projects', 'FraudWatch', 'Aug 2026'),
+      ...bulletsOf(minimal).map(cut),
+    ],
+    // Nothing the floors allow can reach one page here.
+    measure: async () => 2,
+    affords: always,
+  });
+
+  assert.equal(result.structure.experience.length, 1, 'the only job stays');
+  assert.equal(result.structure.projects.length, 1, 'the only project stays');
+  assert.deepEqual(bulletsOf(result.structure), bulletsOf(minimal), 'and nothing is trimmed off either');
+  assert.deepEqual(result.log, []);
+  assert.match(result.warnings[0], /will not fit/);
+});
+
+test('a section is never left as a heading over an entry with nothing under it', async () => {
+  // The floor that had to be stated: trimming stops at two bullets, and the
+  // last entry holding a section up may not be dropped — so there is no path
+  // to a Projects heading printing one bare title line.
+  const result = await fitToPages(RESUME, {
+    target: 1,
+    cuts: [
+      drop('projects', 'MealApp', 'Feb 2025'),
+      drop('projects', 'FraudWatch', 'Aug 2026'),
+      ...bulletsOf(RESUME).map(cut),
+    ],
+    measure: byLines(9).measure,
+    affords: always,
+  });
+
+  assert.ok(result.structure.projects.length >= 1, 'the section survives');
+  assert.ok(
+    result.structure.projects.some((p) => (p.bullets ?? []).length > 0),
+    'and something under it still says what it was',
+  );
 });
