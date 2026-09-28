@@ -370,3 +370,74 @@ test('a section is never left as a heading over an entry with nothing under it',
     'and something under it still says what it was',
   );
 });
+
+test('one section is never emptied while the other keeps everything', async () => {
+  /*
+   * The bug a real resume surfaced. Four jobs and six projects came back with
+   * ONE job and five projects, because the candidate list was built section by
+   * section — every experience drop sat ahead of every project drop, and the
+   * search takes a prefix. The person read their own resume and asked why the
+   * app thought they had one job.
+   */
+  const lopsided: ResumeStructure = {
+    ...RESUME,
+    experience: Array.from({ length: 4 }, (_, i) => ({
+      title: `Role ${i + 1}`,
+      org: `Employer ${i + 1}`,
+      location: 'Oshawa, ON',
+      dates: '2024 – 2025',
+      bullets: ['one', 'two'],
+    })),
+    projects: Array.from({ length: 6 }, (_, i) => ({
+      name: `Project ${i + 1}`,
+      tech: 'TypeScript',
+      dates: '2025',
+      bullets: ['one', 'two'],
+    })),
+  };
+
+  // 40 lines; four entries have to go to reach 24.
+  const result = await fitToPages(lopsided, {
+    target: 1,
+    cuts: [],
+    measure: byLines(24).measure,
+    affords: always,
+  });
+
+  assert.equal(result.pages, 1);
+  assert.ok(
+    result.structure.experience.length >= 3,
+    `kept ${result.structure.experience.length} of 4 jobs — the fuller section should give first`,
+  );
+  assert.ok(result.structure.projects.length <= 3, 'and projects should be the ones shrinking');
+});
+
+test('the fuller section gives first, whichever one that is', async () => {
+  // The mirror image: plenty of jobs, one project. The project must survive.
+  const manyJobs: ResumeStructure = {
+    ...RESUME,
+    experience: Array.from({ length: 6 }, (_, i) => ({
+      title: `Role ${i + 1}`,
+      org: `Employer ${i + 1}`,
+      location: 'Oshawa, ON',
+      dates: '2024 – 2025',
+      bullets: ['one', 'two'],
+    })),
+    projects: [{ name: 'The only project', tech: 'TypeScript', dates: '2025', bullets: ['one', 'two'] }],
+  };
+
+  const result = await fitToPages(manyJobs, {
+    target: 1,
+    cuts: [],
+    measure: byLines(20).measure,
+    affords: always,
+  });
+
+  assert.equal(result.pages, 1);
+  assert.deepEqual(
+    result.structure.projects.map((p) => p.name),
+    ['The only project'],
+    'the section with one entry is not the one raided',
+  );
+  assert.ok(result.structure.experience.length < 6, 'the fuller one gave');
+});

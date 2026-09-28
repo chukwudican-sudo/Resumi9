@@ -210,19 +210,39 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
   }
 
   /*
-   * Then whole entries, weakest first.
+   * Then whole entries — the fuller section giving first, so the two shrink
+   * together.
    *
-   * Two floors, and the second is the one that needed stating. A section may
-   * not be reduced to a heading over a single entry that has nothing under it:
-   * an earlier draft of this allowed exactly that, and a Projects section
-   * printing one bare title line is not a shorter resume, it is a worse one.
+   * Built section by section, this emptied one before touching the other. A
+   * resume with four jobs and six projects came back with ONE job and five
+   * projects, because every experience drop sat ahead of every project drop in
+   * the list and the search takes a prefix. The person read it and asked why
+   * the app thought they had one job.
+   *
+   * There is no ranking across sections — the tailor orders within each — so
+   * proportion is the fairest thing available: take from whichever has more
+   * left, and a tie goes to projects, since a job is the harder thing to
+   * replace on a resume and the floors already single experience out for
+   * protection.
+   *
+   * Two floors below that. At least one job, always; and a section may not be
+   * reduced to a heading over an entry with nothing under it — a Projects
+   * heading printing one bare title line is not a shorter resume, it is a
+   * worse one.
    */
-  for (const section of SECTIONS) {
-    for (const i of weakestFirst(section)) {
-      if (!mayDrop(section, i)) continue;
-      gone[section].add(i);
-      usable.push({ section, index: i, text: null, name: label[section][i] });
-    }
+  for (;;) {
+    const options = SECTIONS.map((section) => ({
+      section,
+      left: weakestFirst(section).filter((i) => mayDrop(section, i)),
+      size: weakestFirst(section).length,
+    })).filter((o) => o.left.length > 0);
+    if (!options.length) break;
+
+    options.sort((a, b) => b.size - a.size || (a.section === 'projects' ? -1 : 1));
+    const { section, left } = options[0];
+    const i = left[0];
+    gone[section].add(i);
+    usable.push({ section, index: i, text: null, name: label[section][i] });
   }
 
   return usable;
