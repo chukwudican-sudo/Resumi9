@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import Anthropic from '@anthropic-ai/sdk';
 import {
   CALL_CONFIG,
   DEADLINE_GOVERNED,
@@ -8,7 +9,9 @@ import {
   NoToolUseError,
   REQUEST_BUDGET_MS,
   TruncatedError,
+  pauseBefore,
   readToolUse,
+  serviceIsBusy,
   type UsageKind,
 } from './anthropic';
 import { estimateCostUsd } from './pricing';
@@ -57,12 +60,17 @@ test('no deadline-governed call may time out before the request budget does', ()
   }
 });
 
-test('a deadline-governed call is never retried', () => {
-  // A retry doubles the worst case, and the SDK retries a timeout
-  // unconditionally. That doubling is what turned a 45-second budget into the
-  // two minutes somebody actually sat through.
+test('the SDK does no retrying of its own inside a deadline', () => {
+  // The SDK retries a timeout unconditionally, and a retried slow call is
+  // another slow call for twice the wait. That doubling is what turned a
+  // 45-second budget into the two minutes somebody actually sat through.
+  //
+  // These calls ARE retried now — once, by callClaude, and only when Anthropic
+  // itself said it was busy. `serviceIsBusy` is what keeps those apart, and the
+  // retry is skipped for any kind where the SDK already does its own, so the
+  // two can never stack.
   for (const kind of DEADLINE_GOVERNED) {
-    assert.equal(CALL_CONFIG[kind].retries, 0, `${kind} must not retry inside a deadline`);
+    assert.equal(CALL_CONFIG[kind].retries, 0, `${kind} must leave retrying to callClaude`);
   }
 });
 
@@ -139,4 +147,62 @@ test('token budgets carry Sonnet 5 headroom', () => {
       `${kind} still carries a pre-Sonnet-5 token budget`,
     );
   }
+});
+
+// ── retrying a busy service ────────────────────────────────────────────────
+//
+// Somebody watched a tailor fail in front of them because Anthropic was full.
+// There was no retry, deliberately: under the old 52-second budget a second
+// attempt ran past the ceiling and the platform killed the function mid-flight,
+// which is worse than the failure. The budget is now 110 seconds and a retry
+// fits, so the question becomes which failures deserve one.
+
+test('a busy service is worth trying again', () => {
+  for (const status of [429, 500, 502, 503, 529]) {
+    const err = new Anthropic.APIError(status, undefined, 'busy', undefined);
+    assert.ok(serviceIsBusy(err), `${status} means not now, not never`);
+  }
+});
+
+test('our own clocks are never retried', () => {
+  // Both of these are this app running out of time, not Anthropic being full.
+  // Retrying either buys a second slow call for twice the wait, which is the
+  // exact behaviour `retries: 0` was set to prevent.
+  assert.equal(serviceIsBusy(new Anthropic.APIUserAbortError()), false, 'the request budget ran out');
+  assert.equal(
+    serviceIsBusy(new Anthropic.APIConnectionTimeoutError({ message: 'slow' })),
+    false,
+    'the per-attempt leash fired',
+  );
+});
+
+test('a request that was wrong is never retried', () => {
+  for (const status of [400, 401, 403, 404, 413, 422]) {
+    const err = new Anthropic.APIError(status, undefined, 'no', undefined);
+    assert.equal(serviceIsBusy(err), false, `${status} will fail exactly the same way twice`);
+  }
+});
+
+test('a connection that never landed is worth one more go', () => {
+  assert.ok(serviceIsBusy(new Anthropic.APIConnectionError({ message: 'socket hang up' })));
+});
+
+test('anything that is not an API failure is left alone', () => {
+  assert.equal(serviceIsBusy(new Error('something else')), false);
+  assert.equal(serviceIsBusy(null), false);
+  assert.equal(serviceIsBusy(undefined), false);
+});
+
+test('retry-after is honoured, and capped', () => {
+  const withHeader = (value: string) => ({ headers: new Headers({ 'retry-after': value }) });
+  assert.equal(pauseBefore(withHeader('3')), 3_000, 'wait as long as they asked');
+  assert.equal(pauseBefore(withHeader('600')), 10_000, 'but not longer than a request has');
+  assert.equal(pauseBefore(withHeader('nonsense')), 1_000, 'unreadable falls back');
+  assert.equal(pauseBefore({}), 1_000, 'and so does absent');
+});
+
+test('a plain-object header is read too', () => {
+  // Older SDK shapes hand back an object rather than a Headers instance.
+  assert.equal(pauseBefore({ headers: { 'retry-after': '2' } }), 2_000);
+  assert.equal(pauseBefore({ headers: { 'Retry-After': '2' } }), 2_000);
 });

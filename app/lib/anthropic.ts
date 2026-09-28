@@ -94,6 +94,55 @@ export const REQUEST_BUDGET_MS = 110_000;
 export const MAX_DURATION_S = 120;
 
 /**
+ * How much budget a second attempt needs before it is worth making.
+ *
+ * A retry bounded by four seconds is not a retry, it is four seconds spent
+ * arriving at the same answer later. Roughly what the quickest real call takes.
+ */
+const RETRY_FLOOR_MS = 25_000;
+
+/** Statuses that mean "not now", as opposed to "not ever" or "not like that". */
+const BUSY = new Set([429, 500, 502, 503, 529]);
+
+/**
+ * Whether a failure was the service being full rather than anything else.
+ *
+ * The two exclusions at the top are the ones that matter, and both are OUR
+ * clocks rather than Anthropic's: an abort is the request budget running out,
+ * and a connection timeout is the per-attempt leash. Retrying either buys a
+ * second slow call and a doubled wait, which is the exact behaviour `retries:
+ * 0` exists to prevent. A connection error that never reached them is worth
+ * one more go; a 400 never is.
+ */
+export function serviceIsBusy(err: unknown): boolean {
+  if (err instanceof Anthropic.APIUserAbortError) return false;
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return false;
+  if (err instanceof Anthropic.APIConnectionError) return true;
+  return err instanceof Anthropic.APIError && typeof err.status === 'number' && BUSY.has(err.status);
+}
+
+/**
+ * How long to wait before trying again.
+ *
+ * Anthropic says when it is ready via `retry-after`; honour it, because
+ * hammering a full service is how a busy minute becomes a rate limit. Capped,
+ * so a header asking for five minutes cannot eat a request budget that has
+ * two — past the cap the wait is pointless and the attempt should just fail.
+ */
+export function pauseBefore(err: unknown, now = 1_000): number {
+  const raw = (err as { headers?: unknown })?.headers;
+  const header =
+    raw instanceof Headers
+      ? raw.get('retry-after')
+      : typeof raw === 'object' && raw !== null
+        ? ((raw as Record<string, unknown>)['retry-after'] ?? (raw as Record<string, unknown>)['Retry-After'])
+        : null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, 10_000);
+  return now;
+}
+
+/**
  * Per-kind model + budget. Keeps model choice out of the handlers.
  *
  * **maxTokens is not comparable to the numbers that were here before.** Sonnet
@@ -265,9 +314,9 @@ export async function callClaude<T>(opts: CallClaudeOptions): Promise<CallClaude
 
   // What is left of the request's budget, if the caller set one. Nothing here
   // may outlive it — that is the whole point of a deadline over a timeout.
-  const remaining = opts.deadline ? opts.deadline - Date.now() : null;
-  if (remaining !== null && remaining <= 0) throw new Anthropic.APIUserAbortError();
-  const signal = remaining !== null ? AbortSignal.timeout(remaining) : undefined;
+  // Read per attempt rather than once, because a retry starts later than the
+  // call it is retrying and must be bounded by what is left, not by what was.
+  const budgetLeft = () => (opts.deadline ? opts.deadline - Date.now() : null);
 
   // The system prompt is the stable part of every request, so it carries the
   // cache breakpoint. Anything volatile must stay in the user content or the
@@ -284,15 +333,51 @@ export async function callClaude<T>(opts: CallClaudeOptions): Promise<CallClaude
 
   // `output_config` is not in the SDK's published request type yet, hence the
   // cast. Confined to this one place instead of every call site.
-  const response: any = await client.messages.create({
-    model,
-    max_tokens: opts.maxTokens ?? config.maxTokens,
-    output_config: { effort: opts.effort ?? config.effort },
-    system,
-    tools: [opts.tool],
-    tool_choice: { type: 'tool', name: opts.tool.name },
-    messages: [{ role: 'user', content: opts.content }],
-  } as any, signal ? { signal } : undefined);
+  const send = async () => {
+    const left = budgetLeft();
+    if (left !== null && left <= 0) throw new Anthropic.APIUserAbortError();
+    const signal = left !== null ? AbortSignal.timeout(left) : undefined;
+    return client.messages.create({
+      model,
+      max_tokens: opts.maxTokens ?? config.maxTokens,
+      output_config: { effort: opts.effort ?? config.effort },
+      system,
+      tools: [opts.tool],
+      tool_choice: { type: 'tool', name: opts.tool.name },
+      messages: [{ role: 'user', content: opts.content }],
+    } as any, signal ? { signal } : undefined) as Promise<any>;
+  };
+
+  /*
+   * One retry, and only when Anthropic said it was busy.
+   *
+   * The heavy calls set `retries: 0` because the SDK retries indiscriminately —
+   * including a timeout, where a second attempt buys another slow call for
+   * twice the wait. But a 529 is the opposite case: nothing was wrong with the
+   * request, the service was full, and the person got an apology for something
+   * that would have worked a second later. Somebody watched a tailor fail that
+   * way in front of them.
+   *
+   * It was not affordable before. Under the old 52-second budget a second
+   * attempt ran past the 60-second ceiling and the platform killed the function
+   * mid-flight — no catch, no refund, no message, strictly worse than the
+   * failure it was trying to fix. At 110 seconds a 45-second call and one retry
+   * fit with room to spare, which is what makes this possible now and did not
+   * before.
+   *
+   * Only where the SDK is doing none of its own, so the two can never stack.
+   */
+  let response: any;
+  try {
+    response = await send();
+  } catch (err) {
+    const left = budgetLeft();
+    const affordsAnother = left === null || left >= RETRY_FLOOR_MS;
+    if (config.retries > 0 || !serviceIsBusy(err) || !affordsAnother) throw err;
+    console.error(`[Resumi9] ${opts.kind}: the service was busy, trying once more.`);
+    await new Promise((resolve) => setTimeout(resolve, pauseBefore(err)));
+    response = await send();
+  }
 
   const toolUse = readToolUse(response);
 
