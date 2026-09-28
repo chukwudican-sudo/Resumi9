@@ -1652,6 +1652,59 @@ export async function createApplication(
     requirements: string[];
   },
 ): Promise<string> {
+  /*
+   * The same posting pasted twice does not become two applications.
+   *
+   * Tailoring can fail — the service is busy, the answer comes back unreadable
+   * — and the natural thing to do is go back and paste the posting again. The
+   * application was already created by then, so the list grows a second copy of
+   * a job nobody applied to twice, and the first one sits there empty forever.
+   *
+   * Reuse is deliberately confined to a draft that produced NOTHING. An
+   * application with a resume against it represents real work and real credits,
+   * and somebody re-applying to a role a year later is entitled to a fresh one.
+   * An empty draft is not something anyone can be attached to, so taking it
+   * back cannot cost them anything.
+   *
+   * Matched on company and role rather than the posting text, because the text
+   * is what differs between two pastes of the same job: people select a bit
+   * more or less of the page. Both must be present — an extraction that found
+   * neither is too weak a match to act on.
+   */
+  const reusable =
+    posting.company && posting.role
+      ? await db
+          .select({ applicationId: applications.id, postingId: jobPostings.id })
+          .from(applications)
+          .innerJoin(jobPostings, eq(jobPostings.id, applications.postingId))
+          .where(
+            and(
+              eq(applications.userId, userId),
+              eq(applications.status, 'draft'),
+              sql`lower(trim(${jobPostings.company})) = lower(trim(${posting.company}))`,
+              sql`lower(trim(${jobPostings.role})) = lower(trim(${posting.role}))`,
+              sql`not exists (select 1 from ${resumes} where ${resumes.applicationId} = ${applications.id})`,
+            ),
+          )
+          .orderBy(desc(applications.createdAt))
+          .limit(1)
+      : [];
+
+  if (reusable.length) {
+    // Freshened rather than left as it was: the second paste may carry more of
+    // the posting than the first, and it is the one the person just looked at.
+    await db
+      .update(jobPostings)
+      .set({
+        location: posting.location,
+        description: posting.description,
+        sourceUrl: posting.sourceUrl,
+        requirements: posting.requirements,
+      })
+      .where(eq(jobPostings.id, reusable[0].postingId));
+    return reusable[0].applicationId;
+  }
+
   const postingId = newId('post');
   const applicationId = newId('app');
 
