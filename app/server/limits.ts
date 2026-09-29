@@ -23,11 +23,32 @@ import { getUsageWindow } from './db/repository';
  * this code is wrong.
  */
 
-/** Total across all users, rolling 24h. Override with RESUMI_DAILY_USD_CEILING. */
-const GLOBAL_DAILY_USD = Number(process.env.RESUMI_DAILY_USD_CEILING ?? 25);
+/**
+ * Total across all users, rolling 24h. Override with RESUMI_DAILY_USD_CEILING.
+ *
+ * A hundred, raised from twenty-five, and it is worth being clear about what
+ * it is for. It is not a budget. A full application — the posting, the tailor,
+ * a couple of edits — costs about thirteen cents, and every account in the
+ * app's first twenty-five days spent $5.30 between them, about twenty cents a
+ * day. This is the number a runaway loop or a scripted account cannot get past
+ * before somebody notices, and at a hundred a bad day costs a bad day.
+ *
+ * It is also the figure to revisit first if the app ever gets busy: the free
+ * allowance below is generous on purpose, and ten accounts all emptying theirs
+ * would reach this in an afternoon.
+ */
+const GLOBAL_DAILY_USD = Number(process.env.RESUMI_DAILY_USD_CEILING ?? 100);
 
-/** One account's share, rolling 24h. Override with RESUMI_USER_DAILY_USD. */
-const USER_DAILY_USD = Number(process.env.RESUMI_USER_DAILY_USD ?? 2);
+/**
+ * One account's share, rolling 24h. Override with RESUMI_USER_DAILY_USD.
+ *
+ * Ten dollars is roughly seventy-five applications, well past the fifty a day
+ * the credits allow and far past what a person does — so it should only ever
+ * be reached by something that is not a person. Two dollars, which is what it
+ * was, sat BELOW the free allowance and would have refused somebody at their
+ * fifteenth honest application with a message about capacity.
+ */
+const USER_DAILY_USD = Number(process.env.RESUMI_USER_DAILY_USD ?? 10);
 
 /**
  * Calls per user per minute.

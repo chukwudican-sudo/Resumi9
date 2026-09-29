@@ -3,7 +3,7 @@ import DeleteEverything from '../components/account/DeleteEverything';
 import LanguagePicker from '../components/account/LanguagePicker';
 import LookingFor from '../components/account/LookingFor';
 import { DEFAULT_LOCALE } from '../lib/locales';
-import { MONTHLY_CREDITS, creditsLabel, nextReset } from '../lib/credits';
+import { DAILY_CREDITS, creditsLabel, hoursUntil, nextReset } from '../lib/credits';
 import { requireUserId } from '../server/auth';
 import { getUser } from '../server/db/repository';
 
@@ -63,18 +63,17 @@ export default async function AccountPage() {
           <Block title="Applications">
             <div className="flex items-baseline gap-2.5">
               <span className="font-serif text-[34px] leading-none">{credits}</span>
-              <span className="text-[13px] text-ink-faint">of {MONTHLY_CREDITS} left this month</span>
+              <span className="text-[13px] text-ink-faint">of {DAILY_CREDITS} left today</span>
             </div>
             <div className="mt-3.5 h-1 overflow-hidden rounded-sm bg-rule">
               <div
                 className="h-full rounded-sm bg-accent"
-                style={{ width: `${Math.round((credits / MONTHLY_CREDITS) * 100)}%` }}
+                style={{ width: `${Math.round((credits / DAILY_CREDITS) * 100)}%` }}
               />
             </div>
             <p className="mt-3 text-[12.5px] leading-relaxed text-ink-muted">
               {credits > 0 ? `${creditsLabel(credits)}. ` : 'None left. '}
-              Back to {MONTHLY_CREDITS} on{' '}
-              {resetAt.toLocaleDateString('en-CA', { day: 'numeric', month: 'long' })}.
+              Back to {DAILY_CREDITS} in {hoursUntil(resetAt)} hours.
             </p>
           </Block>
 

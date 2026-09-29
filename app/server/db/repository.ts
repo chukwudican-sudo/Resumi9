@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNotNull, isNull, lte, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
 import type { ResumeStructure } from '../../lib/types';
-import { MONTHLY_CREDITS, nextReset } from '../../lib/credits';
+import { DAILY_CREDITS, nextReset } from '../../lib/credits';
 import { splitEmployment } from '../../lib/employment';
 import { entriesFromStructure, factsFromStructure, sectionsFromStructure } from '../../lib/importRows';
 import { contentOf, sectionFromRow, shapeOf } from '../../lib/sections';
@@ -102,7 +102,7 @@ export async function setUserLocale(userId: string, locale: string) {
 export async function resetCreditsIfDue(userId: string): Promise<void> {
   await db
     .update(users)
-    .set({ credits: MONTHLY_CREDITS, creditsResetAt: nextReset() })
+    .set({ credits: DAILY_CREDITS, creditsResetAt: nextReset() })
     .where(
       and(
         eq(users.id, userId),
@@ -146,7 +146,7 @@ export async function spendCredit(userId: string): Promise<number | null> {
 export async function refundCredit(userId: string): Promise<void> {
   await db
     .update(users)
-    .set({ credits: sql`least(${users.credits} + 1, ${MONTHLY_CREDITS})` })
+    .set({ credits: sql`least(${users.credits} + 1, ${DAILY_CREDITS})` })
     .where(eq(users.id, userId));
 }
 

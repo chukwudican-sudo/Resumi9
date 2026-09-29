@@ -5,7 +5,7 @@ import { TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt
 import type { ResumeStructure } from '../../../../lib/types';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import { requireUserId } from '../../../../server/auth';
-import { MONTHLY_CREDITS } from '../../../../lib/credits';
+import { DAILY_CREDITS, hoursUntil, nextReset } from '../../../../lib/credits';
 import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
 import { annotate, cutTargets, resolveTailored, unreadable } from '../../../../lib/provenance';
@@ -87,7 +87,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
     return errorResponse(
       {
         type: 'generic',
-        message: `You've used all ${MONTHLY_CREDITS} free applications this month. They come back on the 1st.`,
+        // Hours, not a date: the reset is midnight UTC and nobody knows where
+        // the person reading this is.
+        message: `You've used all ${DAILY_CREDITS} free applications for today. They come back in ${hoursUntil(nextReset())} hours.`,
       },
       402,
     );
