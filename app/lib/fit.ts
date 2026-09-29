@@ -95,6 +95,25 @@ export interface FitResult {
   pages: number | null;
   log: string[];
   warnings: string[];
+  /**
+   * Whole entries this took off, kept as they were.
+   *
+   * So the resume that gets saved knows what is missing from it. Without this
+   * the saved version is only the shortened page, and an edit handed that page
+   * cannot see — let alone put back — a job it removed ten seconds earlier.
+   */
+  dropped: DroppedEntry[];
+}
+
+/** An entry the app removed, and where it was. */
+export interface DroppedEntry {
+  section: Section;
+  /** Its position in that section before anything was cut. */
+  index: number;
+  /** What to call it. */
+  name: string;
+  /** The entry itself, verbatim — never a summary of it. */
+  entry: unknown;
 }
 
 const pagesWord = (n: number) => (n === 1 ? 'one page' : `${n} pages`);
@@ -377,7 +396,7 @@ function describe(cuts: ResolvedCut[], target: number): string[] {
  * have worked — and cut nothing.
  */
 export async function fitToPages(structure: ResumeStructure, opts: FitOptions): Promise<FitResult> {
-  const unchanged = { structure, log: [] as string[], warnings: [] as string[] };
+  const unchanged = { structure, log: [] as string[], warnings: [] as string[], dropped: [] as DroppedEntry[] };
 
   // No budget to measure, so nothing is known and nothing is claimed. A page
   // rule reads as guidance on a resume whose length nobody counted.
@@ -463,5 +482,16 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
     pages: best.pages,
     log: describe(best.cuts, opts.target),
     warnings: [],
+    // Read off the ORIGINAL structure, by the position each cut recorded, so
+    // what is kept is the entry as the reader would have seen it.
+    dropped: best.cuts
+      .filter((c) => c.text === null)
+      .map((c) => ({
+        section: c.section,
+        index: c.index,
+        name: c.name ?? 'an entry',
+        entry: (structure[c.section] ?? [])[c.index],
+      }))
+      .filter((d) => d.entry),
   };
 }

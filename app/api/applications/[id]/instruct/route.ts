@@ -7,6 +7,8 @@ import { asLines, withoutOrderTalk } from '../../../../lib/changeLog';
 import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
+import { readRestore, restoreLine, withRestored } from '../../../../lib/restore';
+import type { DroppedEntry } from '../../../../lib/fit';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
@@ -37,6 +39,16 @@ const FREE_EDITS = 10;
  * and somebody who deliberately placed a section would otherwise discover that
  * days later with no idea what undid it.
  */
+/**
+ * Said whenever something comes back that a page limit had taken off.
+ *
+ * The resume is very likely longer than the rule allows again — it was cut to
+ * meet it. Their words win, so it goes back; saying nothing would let them
+ * find out from a two-page PDF at the moment they send it.
+ */
+const PAGE_RULE_MAY_BREAK =
+  'This is likely over the page limit in your rules again. Tailoring again will cut it back to fit.';
+
 const ORDER_IS_LOCAL = 'This order applies to this resume. Tailoring again rebuilds from your profile and puts it back.';
 
 interface InstructResult {
@@ -169,6 +181,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   /*
+   * Putting back what the app took off, read and carried out by the app.
+   *
+   * The entry is copied from what was kept when it was cut, word for word, so
+   * there is nothing to retype and nothing to invent. Same shape as a section
+   * move: the app does the thing it can do exactly, and the model is only
+   * asked to read a sentence — and here, not even that, unless this misses.
+   */
+  const kept = ((current.dropped as DroppedEntry[]) ?? []).filter((d) => d && d.entry);
+  const asking = readRestore(instruction, kept, answer);
+  if (asking && 'ask' in asking && !answer) {
+    return NextResponse.json({ question: asking.ask, editsLeft: FREE_EDITS - spent });
+  }
+  const restore = asking && 'restore' in asking ? asking.restore : null;
+
+  if (restore && restore.only) {
+    const back = new Set(restore.entries.map((e) => `${e.section}:${e.index}`));
+    const resumeId = await saveResume(userId, params.id, {
+      structure: withRestored(structure, restore.entries),
+      matchScore: current.matchScore,
+      missingRequirements: (current.missingRequirements as string[]) ?? [],
+      log: [`You asked: "${instruction}"`, restoreLine(restore.entries), PAGE_RULE_MAY_BREAK],
+      warnings: [],
+      estimatedPages: current.estimatedPages,
+      // Off the list, so it is not offered back a second time.
+      dropped: kept.filter((d) => !back.has(`${d.section}:${d.index}`)),
+      mode: 'instructed',
+    });
+    return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
+  }
+
+  /*
    * A section move, read and carried out by the app.
    *
    * The model is never consulted about order. Asked to move a section it has
@@ -204,15 +247,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       log: [`You asked: "${instruction}"`, moveLine(move), ORDER_IS_LOCAL],
       warnings: [],
       estimatedPages: current.estimatedPages,
+      dropped: (current.dropped as unknown[]) ?? [],
       mode: 'instructed',
     });
     return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
   }
 
+  /*
+   * What the app took off this resume, named for the model.
+   *
+   * Names and dates only — never the bullets. The model does not need them:
+   * if somebody asks for one back the APP copies the entry from here word for
+   * word, the same way it applies a section move. Nothing is retyped, so
+   * nothing can be invented on the way, and the honesty check has nothing to
+   * flag.
+   *
+   * Shown on every edit rather than only when a restore is asked for, because
+   * "why is there just one job" is a question the model cannot answer from a
+   * page it has been handed alone. It answered it with a question back, and
+   * the person was left explaining their own resume to it.
+   */
+  const removed = ((current.dropped as { name?: string; entry?: { dates?: string } }[]) ?? [])
+    .map((d) => (d?.name ? `${d.name}${d.entry?.dates ? ` (${d.entry.dates})` : ''}` : ''))
+    .filter(Boolean);
+
   const said = [
     `The person has asked for one change: "${instruction}"`,
     question ? `You asked them: "${question}"` : '',
     answer ? `They answered: "${answer}"` : '',
+    removed.length
+      ? `Not on this resume: ${removed.join(', ')}. The APP removed ${removed.length === 1 ? 'it' : 'these'} to reach the page limit in their rules — they did not. If they ask why something is missing, say so plainly and name ${removed.length === 1 ? 'it' : 'them'}. If they ask for any of it back, say so in your log and change nothing: the app restores it from what it kept.`
+      : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -340,7 +405,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * guarded structure too, because the guard may have restored a section the
      * model dropped, and the order has to cover what is actually there.
      */
-    const edited = move
+    const moved = move
       ? {
           ...guarded.structure,
           sections:
@@ -348,6 +413,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             guarded.structure.sections,
         }
       : guarded.structure;
+
+    // After the guard, like the move: the guard compares against the resume as
+    // it was, and an entry spliced in beforehand would read to it as one the
+    // model invented.
+    const edited = restore ? withRestored(moved, restore.entries) : moved;
+    const putBack = new Set((restore?.entries ?? []).map((e) => `${e.section}:${e.index}`));
 
     /** Order talk is only the app's to make, and only when there was a move. */
     const quiet = (lines: string[]) => (move ? withoutOrderTalk(lines) : lines);
@@ -385,6 +456,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          * row, so without this line nothing anywhere remembers it happened.
          */
         ...(answer ? [`We asked: ${question || 'which one?'} You said: "${answer}"`] : []),
+        ...(restore ? [restoreLine(restore.entries), PAGE_RULE_MAY_BREAK] : []),
         ...(move ? [moveLine(move), ORDER_IS_LOCAL] : []),
         ...surfaced.log,
         ...honest.log,
@@ -403,6 +475,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // checked — "slightly over 1 page" for a resume that filled two — so the
       // tool no longer requests it. A real measurement replaces this later.
       estimatedPages: current.estimatedPages,
+      // Carried, not recomputed: an edit cuts nothing, and a list that stopped
+      // at the version it was made on would be gone by the next question.
+      dropped: kept.filter((d) => !putBack.has(`${d.section}:${d.index}`)),
       mode: 'instructed',
     });
 

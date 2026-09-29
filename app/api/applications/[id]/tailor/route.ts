@@ -341,6 +341,8 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // one, and the only one anything reads.
       estimatedPages: null,
       pageCount: fitted.pages,
+      // What the fitter took off, so a later edit can see it and offer it back.
+      dropped: fitted.dropped,
     });
 
     // Said out loud rather than done quietly: polishing regroups skills and

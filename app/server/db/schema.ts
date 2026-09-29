@@ -379,6 +379,26 @@ export const resumes = pgTable('resumes', {
    * reads null as "not measured" and never as a failure.
    */
   pageCount: integer('page_count'),
+  /**
+   * Entries the APP removed to reach a page limit, kept whole.
+   *
+   * Without this the resume is just the shortened version and nothing carries
+   * the knowledge of what was taken. Somebody read a page showing one job,
+   * typed "why is there just one", and the edit could not help — the other
+   * three were not on the page, so there was nothing for it to see or restore.
+   *
+   * Deliberately NOT a diff against the profile, which was the first design and
+   * is wrong twice over. Things go absent for several reasons and a diff cannot
+   * tell them apart — it would offer to restore a job somebody deliberately
+   * deleted, describing their own decision as a page-limit cut. And a profile
+   * moves: restoring from it months later splices today's wording into a resume
+   * tailored before it. What is stored here is what was on the page, as it was,
+   * at the moment it was taken off.
+   *
+   * Only the app's own cuts. Anything a person removed by asking is their
+   * business and is not offered back.
+   */
+  dropped: jsonb('dropped').notNull().default([]),
   version: integer('version').notNull().default(1),
   parentResumeId: text('parent_resume_id'),
   /** running | complete | failed — what the recovery banner reads instead of localStorage. */

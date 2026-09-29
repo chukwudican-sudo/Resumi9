@@ -1963,6 +1963,14 @@ export async function saveResume(
      * want of a number, and null reads as "not measured" everywhere it lands.
      */
     pageCount?: number | null;
+    /**
+     * Entries the app took off to reach a page limit, kept whole.
+     *
+     * Carried on every save, not only the one that cut them: an edit saves a
+     * new row, and a list that stopped at the version it was made on would be
+     * gone by the time anybody asked for something back.
+     */
+    dropped?: unknown[];
     /** 'instructed' when this version came from somebody's own instruction. */
     mode?: string;
   },
@@ -1982,6 +1990,7 @@ export async function saveResume(
     warnings: data.warnings,
     estimatedPages: data.estimatedPages,
     pageCount: data.pageCount ?? null,
+    dropped: data.dropped ?? [],
     version: (previous?.version ?? 0) + 1,
     parentResumeId: previous?.id ?? null,
     status: 'complete',
