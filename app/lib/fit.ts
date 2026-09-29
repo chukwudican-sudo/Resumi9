@@ -73,6 +73,27 @@ const MIN_BULLETS = 2;
  */
 const MIN_JOBS = 2;
 
+/**
+ * The fewest projects cutting may leave, on the same reasoning.
+ *
+ * A Projects heading with one entry under it has the problem Experience had
+ * with one job: it reads as an afterthought rather than as a section. For a
+ * student it is worse than that — projects are where somebody shows they build
+ * things unasked, and one of them suggests they do not.
+ *
+ * A floor rather than a target shape. "Aim for three jobs and two projects"
+ * would override the ranking with a layout, and drop a better entry for a worse
+ * one whenever a posting genuinely favours the jobs. This leaves relevance
+ * deciding WHICH survive and only says how few there may be.
+ *
+ * What it costs, and it is worth being honest about it: with a floor on both
+ * sections, the floors rather than the ranking largely decide the SHAPE of a
+ * long resume. The ranking picks which two projects live, not how many. That
+ * is a deliberate trade — for the people who use this, how a page reads
+ * matters more than squeezing out one more per-posting match.
+ */
+const MIN_PROJECTS = 2;
+
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
   target: number;
@@ -175,12 +196,15 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): { cuts: R
    * over nothing, or over one entry whose bullets had been trimmed away. A
    * section survives only while something under it still says what it was.
    */
-  // Two jobs, or all of them where somebody has fewer — the floor stops
-  // cutting, it does not invent a second job for a person with one.
-  const jobFloor = Math.min(MIN_JOBS, identity.experience.length);
+  // Two of each, or all of them where somebody has fewer — a floor stops
+  // cutting, it never invents a second job for a person with one.
+  const floor: Record<Section, number> = {
+    experience: Math.min(MIN_JOBS, identity.experience.length),
+    projects: Math.min(MIN_PROJECTS, identity.projects.length),
+  };
 
   const mayDrop = (section: Section, at: number): boolean => {
-    if (section === 'experience' && identity.experience.length - gone.experience.size <= jobFloor) return false;
+    if (identity[section].length - gone[section].size <= floor[section]) return false;
     return remaining[section].some((bullets, i) => i !== at && !gone[section].has(i) && bullets.length > 0);
   };
 

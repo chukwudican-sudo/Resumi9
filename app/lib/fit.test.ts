@@ -106,9 +106,15 @@ test('an over-long resume loses the fewest bullets that reach the target', async
 });
 
 test('a whole project is dropped when bullets alone cannot get there', async () => {
-  // This is the case measured on the real profile: ten entries, a one-page
-  // rule, and a heading cost that trimming can never recover.
-  const result = await fitToPages(RESUME, {
+  // The case measured on the real profile: a heading cost that trimming can
+  // never recover. Three projects locally, because two is the floor and a
+  // section at its floor has nothing to give.
+  const threeProjects: ResumeStructure = {
+    ...RESUME,
+    projects: [...RESUME.projects, { name: 'Rate Limit Lab', tech: 'Python', dates: 'Mar 2026', bullets: ['rate one', 'rate two'] }],
+  };
+
+  const result = await fitToPages(threeProjects, {
     target: 1,
     cuts: [
       drop('projects', 'MealApp', 'Feb 2025'),
@@ -117,17 +123,16 @@ test('a whole project is dropped when bullets alone cannot get there', async () 
       cut('job three'),
       cut('kudi four'),
     ],
-    // 21 lines. Every trim the floor allows reaches 15 — still two pages at 14
+    // 25 lines. Every trim the floor allows reaches 19 — still two pages at 18
     // a page — so the entry has to go for this to fit at all.
-    measure: byLines(14).measure,
+    measure: byLines(18).measure,
     affords: always,
   });
 
   assert.equal(result.pages, 1);
-  assert.deepEqual(result.structure.projects.map((p) => p.name), ['FraudWatch']);
+  assert.deepEqual(result.structure.projects.map((p) => p.name), ['FraudWatch', 'Rate Limit Lab']);
   assert.equal(bulletsOf(result.structure).includes('meal one'), false, 'its bullets go with it');
   assert.match(result.log[0], /^Dropped 1 project to fit one page: MealApp\./);
-  assert.match(result.log[1], /^Cut \d+ bullets to fit one page/);
 });
 
 test('a resume is never cut below two jobs', async () => {
@@ -301,11 +306,14 @@ test('nothing is measured or cut when the budget is already gone', async () => {
 
 test('budget running out mid-search still saves a version that fits', async () => {
   // Three measurements allowed: the original, the whole ranking, one probe.
+  // 21 lines; the six trims the floor allows reach 15, which fits at 15 a page.
   let allowed = 3;
-  const meter = byLines(12);
+  const meter = byLines(15);
   const result = await fitToPages(RESUME, {
     target: 1,
-    cuts: [drop('projects', 'MealApp', 'Feb 2025'), cut('job four'), cut('kudi four'), cut('project four')],
+    // Bullets only: what is under test is the budget running out mid-search,
+    // and the fixture's two projects are already at the floor.
+    cuts: [cut('job four'), cut('kudi four'), cut('project four'), cut('job three'), cut('kudi three'), cut('project three')],
     measure: async (s) => {
       allowed -= 1;
       return meter.measure(s);
@@ -516,4 +524,56 @@ test('a ranking that covers the job stays quiet', async () => {
   }
 
   assert.deepEqual(said, [], 'the posting decided every cut, so there is nothing to report');
+});
+
+test('a resume is never cut below two projects either', async () => {
+  /*
+   * A Projects heading with one entry under it has the problem Experience had
+   * with one job: it reads as an afterthought rather than a section. For a
+   * student it is worse — projects are where somebody shows they build things
+   * unasked, and one of them suggests they do not.
+   *
+   * Written as a floor rather than a target shape on purpose. "Aim for three
+   * jobs and two projects" would override the ranking with a layout and drop
+   * a better entry for a worse one whenever a posting favours the jobs.
+   */
+  const many: ResumeStructure = {
+    ...RESUME,
+    experience: Array.from({ length: 4 }, (_, i) => ({
+      title: `Role ${i + 1}`, org: `Employer ${i + 1}`, location: 'Oshawa, ON', dates: '2024 – 2025', bullets: ['one', 'two'],
+    })),
+    projects: Array.from({ length: 5 }, (_, i) => ({
+      name: `Project ${i + 1}`, tech: 'TypeScript', dates: '2025', bullets: ['one', 'two'],
+    })),
+  };
+
+  // Every entry offered, and a page too small for any of it to satisfy.
+  const result = await fitToPages(many, {
+    target: 1,
+    cuts: [
+      ...many.projects.map((p) => drop('projects', p.name, p.dates)),
+      ...many.experience.map((e) => drop('experience', e.org, e.dates)),
+    ],
+    measure: byLines(4).measure,
+    affords: always,
+  });
+
+  assert.ok(result.structure.projects.length >= 2, `left ${result.structure.projects.length} project(s) — two is the floor`);
+  assert.ok(result.structure.experience.length >= 2, `left ${result.structure.experience.length} job(s)`);
+});
+
+test('somebody with one project keeps it, and the floor invents nothing', async () => {
+  const onlyOne: ResumeStructure = {
+    ...RESUME,
+    projects: [{ name: 'The only one', tech: 'Python', dates: '2025', bullets: ['one', 'two'] }],
+  };
+
+  const result = await fitToPages(onlyOne, {
+    target: 1,
+    cuts: [drop('projects', 'The only one', '2025')],
+    measure: byLines(3).measure,
+    affords: always,
+  });
+
+  assert.equal(result.structure.projects.length, 1, 'the floor stops cutting, it does not pad');
 });
