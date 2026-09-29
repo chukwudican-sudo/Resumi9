@@ -476,3 +476,44 @@ test('the fuller section gives first, whichever one that is', async () => {
   );
   assert.ok(result.structure.experience.length < 6, 'the fuller one gave');
 });
+
+test('a ranking that runs short is said out loud, not covered up', async () => {
+  // Past the end of the ranking the app chooses with no idea what the posting
+  // wants. That is how one job and five projects happened. It still happens
+  // when the model under-ranks — it is just no longer silent.
+  const said: string[] = [];
+  const realError = console.error;
+  console.error = (...parts: unknown[]) => said.push(parts.join(' '));
+  try {
+    await fitToPages(RESUME, {
+      target: 1,
+      // One cut offered on a resume that needs several.
+      cuts: [cut('job four')],
+      measure: byLines(15).measure,
+      affords: always,
+    });
+  } finally {
+    console.error = realError;
+  }
+
+  assert.equal(said.length, 1, 'exactly one line, not one per cut');
+  assert.match(said[0], /ranking covered 1 of the \d+ cuts needed/);
+});
+
+test('a ranking that covers the job stays quiet', async () => {
+  const said: string[] = [];
+  const realError = console.error;
+  console.error = (...parts: unknown[]) => said.push(parts.join(' '));
+  try {
+    await fitToPages(RESUME, {
+      target: 1,
+      cuts: [cut('kudi four'), cut('project four'), cut('job four'), cut('job three')],
+      measure: byLines(19).measure,
+      affords: always,
+    });
+  } finally {
+    console.error = realError;
+  }
+
+  assert.deepEqual(said, [], 'the posting decided every cut, so there is nothing to report');
+});

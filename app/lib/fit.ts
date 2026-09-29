@@ -128,7 +128,7 @@ interface ResolvedCut {
  *   - the last job, always, however it was ranked;
  *   - anything naming an entry that is not there.
  */
-function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedCut[] {
+function usableCuts(structure: ResumeStructure, targets: CutTarget[]): { cuts: ResolvedCut[]; ranked: number } {
   // Working copies, so the simulation can spend bullets as it goes and know
   // what each entry has left by the time a later cut asks.
   const remaining: Record<Section, string[][]> = {
@@ -199,6 +199,8 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
     const cut = target.kind === 'entry' ? takeEntry(target) : takeBullet(target.text);
     if (cut) usable.push(cut);
   }
+  // Where the person's posting stops deciding and the app starts guessing.
+  const ranked = usable.length;
 
   /*
    * Past the end of the ranking.
@@ -271,7 +273,7 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
     usable.push({ section, index: i, text: null, name: label[section][i] });
   }
 
-  return usable;
+  return { cuts: usable, ranked };
 }
 
 /** Entries dropped and bullets removed, by the positions already worked out. */
@@ -386,7 +388,7 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   if (pages <= opts.target) return { ...unchanged, pages };
 
   const tooLong = `This runs to ${pagesWord(pages)} and your rules ask for ${pagesWord(opts.target)}.`;
-  const cuts = usableCuts(structure, opts.cuts);
+  const { cuts, ranked } = usableCuts(structure, opts.cuts);
   if (!cuts.length) {
     return {
       ...unchanged,
@@ -438,6 +440,22 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
       // it had passed.
       lo = mid + 1;
     }
+  }
+
+  /*
+   * Said out loud when the posting stopped deciding.
+   *
+   * Past the end of the ranking the app chooses on its own, with no idea what
+   * this job asks for — and that is how somebody got one job and five
+   * projects. The model is told to rank everything precisely so this never
+   * fires; a log line is how we find out when it does, instead of discovering
+   * it in a screenshot.
+   */
+  if (best.cuts.length > ranked) {
+    console.error(
+      `[Resumi9] The cut ranking covered ${ranked} of the ${best.cuts.length} cuts needed — ` +
+        'the rest were chosen without reference to the posting.',
+    );
   }
 
   return {
