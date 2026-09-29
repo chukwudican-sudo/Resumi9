@@ -51,6 +51,28 @@ type Section = (typeof SECTIONS)[number];
  */
 const MIN_BULLETS = 2;
 
+/**
+ * The fewest jobs cutting may leave.
+ *
+ * One was the floor, and one is what a real resume came back with: four jobs
+ * in, three dropped to reach a page, Kudi Kitchen alone under Experience. The
+ * person's own words for it — *"just one experience is crazy, it makes me look
+ * like I don't have any experience in a workplace in life"* — are the whole
+ * argument. A recruiter glancing at a page sees ONE JOB before reading which
+ * job it was, and nobody reconstructs the missing ones from the fact that the
+ * page is short.
+ *
+ * The ranking cannot know this. It scores each entry against this posting, and
+ * however good that scoring is, it says nothing about how the page reads as a
+ * whole. Relevance decides which entries go; this decides how few may be left.
+ *
+ * Costs almost nothing. Measured: four jobs at ten bullets each still fit on
+ * one page, so a resume where only two jobs may go and that is not enough is a
+ * very unusual resume. Somebody there is told it will not fit rather than
+ * handed a page that makes them look unemployed.
+ */
+const MIN_JOBS = 2;
+
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
   target: number;
@@ -134,8 +156,12 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): ResolvedC
    * over nothing, or over one entry whose bullets had been trimmed away. A
    * section survives only while something under it still says what it was.
    */
+  // Two jobs, or all of them where somebody has fewer — the floor stops
+  // cutting, it does not invent a second job for a person with one.
+  const jobFloor = Math.min(MIN_JOBS, identity.experience.length);
+
   const mayDrop = (section: Section, at: number): boolean => {
-    if (section === 'experience' && identity.experience.length - gone.experience.size <= 1) return false;
+    if (section === 'experience' && identity.experience.length - gone.experience.size <= jobFloor) return false;
     return remaining[section].some((bullets, i) => i !== at && !gone[section].has(i) && bullets.length > 0);
   };
 

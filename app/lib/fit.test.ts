@@ -130,24 +130,59 @@ test('a whole project is dropped when bullets alone cannot get there', async () 
   assert.match(result.log[1], /^Cut \d+ bullets to fit one page/);
 });
 
-test('the last job is never dropped, however it is ranked', async () => {
-  const result = await fitToPages(RESUME, {
-    target: 2,
-    cuts: [
-      drop('experience', 'Droady', 'Nov 2025 – May 2026'),
-      drop('experience', 'Kudi Kitchen', 'Jan 2024 – Aug 2024'),
-    ],
-    // 16 lines is three pages here, and dropping Droady's five reaches two.
-    // Size this so the resume is genuinely OVER target: at 11 lines a page it
-    // already fits, the loop returns before cutting anything, and the test
-    // passes or fails on nothing at all.
-    measure: byLines(7).measure,
+test('a resume is never cut below two jobs', async () => {
+  /*
+   * One was the floor, and one is what a real resume came back with: four jobs
+   * in, three dropped to reach a page. The person's words for it — "just one
+   * experience is crazy, it makes me look like I don't have any experience in
+   * a workplace in life" — are the argument. A recruiter sees ONE JOB before
+   * reading which job it was.
+   *
+   * The ranking cannot know that. It scores entries against a posting and says
+   * nothing about how the page reads. Relevance picks which go; this picks how
+   * few may be left.
+   */
+  const fourJobs: ResumeStructure = {
+    ...RESUME,
+    experience: Array.from({ length: 4 }, (_, i) => ({
+      title: `Role ${i + 1}`,
+      org: `Employer ${i + 1}`,
+      location: 'Oshawa, ON',
+      dates: '2024 – 2025',
+      bullets: ['one', 'two'],
+    })),
+    projects: [],
+  };
+
+  // Every job offered, weakest last, and a page so small nothing can satisfy it.
+  const result = await fitToPages(fourJobs, {
+    target: 1,
+    cuts: fourJobs.experience.map((e) => drop('experience', e.org, e.dates)),
+    measure: byLines(4).measure,
     affords: always,
   });
 
-  assert.equal(result.structure.experience.length, 1, 'a resume with no work history is not a shorter resume');
-  assert.deepEqual(result.structure.experience.map((e) => e.org), ['Kudi Kitchen']);
-  assert.match(result.log[0], /^Dropped 1 role to fit 2 pages: Droady\./);
+  assert.ok(
+    result.structure.experience.length >= 2,
+    `left ${result.structure.experience.length} job(s) — two is the floor`,
+  );
+});
+
+test('somebody with one job keeps it, and the floor invents nothing', async () => {
+  const oneJob: ResumeStructure = {
+    ...RESUME,
+    experience: [{ ...RESUME.experience[0] }],
+    projects: [],
+  };
+
+  const result = await fitToPages(oneJob, {
+    target: 1,
+    cuts: [drop('experience', oneJob.experience[0].org, oneJob.experience[0].dates)],
+    measure: byLines(3).measure,
+    affords: always,
+  });
+
+  assert.equal(result.structure.experience.length, 1, 'the floor stops cutting, it does not pad');
 });
 
 test('an entry that is not on the resume is skipped', async () => {
