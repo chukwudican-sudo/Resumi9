@@ -44,7 +44,15 @@ export function nextReset(from: Date = new Date()): Date {
 /** A day, in milliseconds. Nothing legitimate sits further out than this. */
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Whether this account's day has rolled over. */
+/**
+ * Whether this account's day has rolled over.
+ *
+ * The same three cases as the WHERE clause in `resetCreditsIfDue`, and they
+ * have to stay the same: this one is what the screens read, that one is what
+ * actually grants the credits. They diverged once — the monthly-row fix went
+ * in here alone, nothing on the granting path calls this, and the change
+ * shipped having done nothing at all.
+ */
 export function isDue(resetAt: Date | null | undefined, now: Date = new Date()): boolean {
   // Never set means an account from before any of this existed. Treated as due,
   // so it starts its first day rather than sitting on whatever it had left.

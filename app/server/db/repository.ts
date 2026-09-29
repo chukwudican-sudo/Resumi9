@@ -106,8 +106,25 @@ export async function resetCreditsIfDue(userId: string): Promise<void> {
     .where(
       and(
         eq(users.id, userId),
-        // Null covers every account created before resets existed.
-        sql`(${users.creditsResetAt} is null or ${users.creditsResetAt} <= now())`,
+        /*
+         * Three cases, and the third is the one that was missed.
+         *
+         * Null covers every account created before resets existed. Past covers
+         * the ordinary rollover. FURTHER OUT THAN A DAY covers a row written by
+         * the monthly scheme: every account in the app carries "the first of
+         * next month", which reads as "not due" and would have held everybody
+         * on their old allowance for days after the change.
+         *
+         * This is the same rule as `isDue` in lib/credits.ts, which is what the
+         * screens read. The two must agree, and they did not: the fix went into
+         * `isDue` alone, and nothing calls it on this path — the reset has
+         * always been a single UPDATE so that two tabs cannot both grant one.
+         */
+        sql`(
+          ${users.creditsResetAt} is null
+          or ${users.creditsResetAt} <= now()
+          or ${users.creditsResetAt} > now() + interval '1 day'
+        )`,
       ),
     );
 }
