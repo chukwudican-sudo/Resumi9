@@ -18,6 +18,7 @@ import { restoreResumeVersion } from '../../server/actions';
 import BeforeResume from './BeforeResume';
 import { useConfirm } from '../undo/ConfirmProvider';
 import type { RequirementMatch } from '../../lib/requirementMatch';
+import { splitWarnings } from '../../lib/changeLog';
 
 interface Props {
   applicationId: string;
@@ -81,8 +82,20 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
    */
   const [asking, setAsking] = useState<{ instruction: string; question: string } | null>(null);
   const [confirmTailor, setConfirmTailor] = useState(false);
+  /** The gaps and the sentence explaining them, folded shut until asked for. */
+  const [showGaps, setShowGaps] = useState(false);
+  const [showRules, setShowRules] = useState(false);
   const [editsLeft, setEditsLeft] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
+
+  /*
+   * Warnings, sorted by who they are about.
+   *
+   * "No CAD evidence in this profile" decides whether to apply at all and
+   * belongs beside the score. "Your own wording was put back" is the app
+   * reporting itself and belongs with the change log. One field held both.
+   */
+  const { aboutTheJob: fitNotes, aboutTheApp: appNotes } = splitWarnings(resume?.warnings ?? []);
 
   async function applyInstruction() {
     const typed = instruction.trim();
@@ -342,6 +355,25 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
               </p>
             )}
             {/*
+              What the app did to protect the resume, beside what it changed.
+
+              These were filed with the warnings, in a box at the bottom of the
+              review column headed "Worth checking" — next to the sentence
+              saying whether this posting is worth applying to at all. Two
+              unrelated kinds of thing in one place, and the one that mattered
+              was under the one that did not. A line saying your own wording was
+              put back belongs here, with the rest of what happened.
+            */}
+            {appNotes.length ? (
+              <div className="mt-5 flex flex-col gap-3 border-t border-rule pt-4">
+                {appNotes.map((note, i) => (
+                  <div key={i} className="border-l-2 border-flag-line pl-3">
+                    <span className="text-[12.5px] leading-relaxed text-flag-ink">{note}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {/*
               Claims only what is actually checked.
 
               It used to end "Nothing is invented to fill a gap", which nothing
@@ -471,18 +503,105 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
 
               {tab === 'review' ? (
                 <>
-                  {resume.matchScore !== null ? (
-                    <div className="rounded-md border border-rule p-[18px]">
+                  {/*
+                    One block for how this resume stands against this job.
+
+                    The score, the gaps and the sentence explaining them were
+                    three separate cards, top to bottom, with other things
+                    between — and the sentence, which is the only one that says
+                    anything a person can act on, was LAST, below the fold,
+                    under a heading that reads like a proofreading note. On a
+                    posting asking for nine things this resume has none of, it
+                    was never seen.
+
+                    Folded shut by default and one tap from open. A tap is not
+                    free, and on screen behind a tap is not obviously better
+                    than visible after a scroll — but a thing nobody scrolls to
+                    is a thing nobody reads, and this way the whole column fits
+                    on one screen.
+                  */}
+                  {resume.matchScore !== null || resume.missingRequirements.length > 0 || fitNotes.length > 0 ? (
+                    <div
+                      className={`rounded-md border p-[18px] ${
+                        resume.missingRequirements.length > 0 || fitNotes.length > 0
+                          ? 'border-flag-line bg-flag-bg'
+                          : 'border-rule'
+                      }`}
+                    >
                       <div className="flex items-baseline justify-between">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">Match</span>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="font-serif text-[30px] leading-none">{resume.matchScore}</span>
-                          <span className="text-[13px] text-ink-faint">/ 100</span>
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">
+                          Against this job
+                        </span>
+                        {resume.matchScore !== null ? (
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="font-serif text-[30px] leading-none">{resume.matchScore}</span>
+                            <span className="text-[13px] text-ink-faint">/ 100</span>
+                          </div>
+                        ) : null}
+                      </div>
+                      {resume.matchScore !== null ? (
+                        <div className="mt-3 h-1 overflow-hidden rounded-sm bg-rule">
+                          <div className="h-full rounded-sm bg-accent" style={{ width: `${resume.matchScore}%` }} />
                         </div>
-                      </div>
-                      <div className="mt-3 h-1 overflow-hidden rounded-sm bg-rule">
-                        <div className="h-full rounded-sm bg-accent" style={{ width: `${resume.matchScore}%` }} />
-                      </div>
+                      ) : null}
+
+                      {resume.missingRequirements.length > 0 || fitNotes.length > 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setShowGaps((open) => !open)}
+                            aria-expanded={showGaps}
+                            className="mt-3.5 flex w-full items-center justify-between gap-3 text-left text-[13.5px] text-flag-ink"
+                          >
+                            <span>
+                              {resume.missingRequirements.length > 0 ? (
+                                <>
+                                  <strong className="font-semibold">
+                                    {resume.missingRequirements.length}{' '}
+                                    {resume.missingRequirements.length === 1 ? 'thing' : 'things'} missing
+                                  </strong>
+                                  {' — '}
+                                  {resume.missingRequirements.slice(0, 2).join(', ')}
+                                  {resume.missingRequirements.length > 2
+                                    ? `, +${resume.missingRequirements.length - 2}`
+                                    : ''}
+                                </>
+                              ) : (
+                                <strong className="font-semibold">Worth reading before you send this</strong>
+                              )}
+                            </span>
+                            <span className="shrink-0 text-[12px] text-accent">{showGaps ? 'Hide' : 'Show'}</span>
+                          </button>
+
+                          {showGaps ? (
+                            <div className="mt-3 border-t border-flag-line pt-3">
+                              {resume.missingRequirements.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {resume.missingRequirements.map((r) => (
+                                    <span
+                                      key={r}
+                                      className="rounded-[3px] border border-flag-line bg-ground-surface px-2.5 py-1 text-xs text-flag-ink"
+                                    >
+                                      {r}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {fitNotes.map((w, i) => (
+                                <p key={i} className="mt-3 text-[12.5px] leading-snug text-flag-ink">
+                                  {w}
+                                </p>
+                              ))}
+                              {resume.missingRequirements.length > 0 ? (
+                                <p className="mt-3 text-[12.5px] leading-snug text-flag">
+                                  If you have touched any of these, say so below and it goes in. If not,
+                                  leave it &mdash; nothing gets invented.
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -492,32 +611,6 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                       missingCount={resume.missingRequirements.length}
                       onImproved={tailor}
                     />
-                  ) : null}
-
-                  {resume.missingRequirements.length > 0 ? (
-                    <div className="rounded-md border border-flag-line bg-flag-bg p-[18px]">
-                      <div className="flex items-center gap-2.5">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8A6414" strokeWidth="1.8" strokeLinecap="round">
-                          <path d="M12 9v4M12 17h.01" />
-                          <path d="M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
-                        </svg>
-                        <span className="text-[13.5px] text-flag-ink">
-                          They ask for {resume.missingRequirements.length}{' '}
-                          {resume.missingRequirements.length === 1 ? 'thing' : 'things'} you have not mentioned
-                        </span>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {resume.missingRequirements.map((r) => (
-                          <span key={r} className="rounded-[3px] border border-flag-line bg-ground-surface px-2.5 py-1 text-xs text-flag-ink">
-                            {r}
-                          </span>
-                        ))}
-                      </div>
-                      <p className="mt-3 text-[12.5px] leading-snug text-flag">
-                        If you have touched any of these, say so above and it goes in. If not,
-                        leave it &mdash; nothing gets invented.
-                      </p>
-                    </div>
                   ) : null}
 
                   {/*
@@ -532,17 +625,36 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                   */}
                   {ruleResults.length ? (
                     <div className="rounded-md border border-rule p-[18px]">
-                      <div className="flex items-baseline justify-between">
+                      {/*
+                        One line when every rule passed, which is the usual case
+                        and was costing a whole card. A failure opens itself: a
+                        rule somebody wrote and this resume broke is not
+                        something they should have to go looking for.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => setShowRules((open) => !open)}
+                        aria-expanded={showRules || ruleResults.some((r) => r.verdict === 'fail')}
+                        className="flex w-full items-baseline justify-between gap-3 text-left"
+                      >
                         <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">
                           Your rules
                         </span>
-                        <span className="text-[12px] text-ink-muted">
-                          {ruleResults.filter((r) => r.verdict === 'pass').length} of{' '}
-                          {ruleResults.filter((r) => r.verdict !== 'guidance').length} checked
+                        <span className="flex items-baseline gap-2.5">
+                          <span className={ruleResults.some((r) => r.verdict === 'fail') ? 'text-[12px] text-flag' : 'text-[12px] text-ink-muted'}>
+                            {ruleResults.filter((r) => r.verdict === 'pass').length} of{' '}
+                            {ruleResults.filter((r) => r.verdict !== 'guidance').length} checked
+                          </span>
+                          {ruleResults.some((r) => r.verdict === 'fail') ? null : (
+                            <span className="text-[12px] text-accent">{showRules ? 'Hide' : 'Show'}</span>
+                          )}
                         </span>
-                      </div>
+                      </button>
 
-                      <ul className="mt-3 flex flex-col gap-2.5">
+                      <ul
+                        hidden={!showRules && !ruleResults.some((r) => r.verdict === 'fail')}
+                        className="mt-3 flex flex-col gap-2.5"
+                      >
                         {ruleResults.map((r) => (
                           <li key={r.ruleId} className="flex items-start gap-2.5">
                             <span className="mt-[3px] grid h-3.5 w-3.5 shrink-0 place-items-center">
@@ -606,15 +718,6 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                           </li>
                         ))}
                       </ul>
-                    </div>
-                  ) : null}
-
-                  {resume.warnings.length > 0 ? (
-                    <div className="flex flex-col gap-2 rounded-md border border-flag-line bg-flag-bg p-4">
-                      <span className="text-[11px] uppercase tracking-[0.12em] text-flag">Worth checking</span>
-                      {resume.warnings.map((w, i) => (
-                        <span key={i} className="text-[13px] leading-snug text-flag-ink">{w}</span>
-                      ))}
                     </div>
                   ) : null}
 

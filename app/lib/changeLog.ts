@@ -122,3 +122,40 @@ export function mendSplitLines(lines: string[]): string[] {
 
   return out.filter(Boolean);
 }
+
+/**
+ * Warnings sorted by who they are about.
+ *
+ * One field holds two unrelated kinds of sentence, and they ended up in one
+ * box at the bottom of the review column called "Worth checking":
+ *
+ *   "This candidate's background is entirely software engineering with no CAD
+ *    evidence — consider whether this posting is a good fit."
+ *
+ *   "A rewritten bullet claimed Python, which this bullet does not say, so
+ *    your own wording was put back."
+ *
+ * The first decides whether to apply at all. The second is the app reporting
+ * what it did, and belongs with the change log where the rest of that lives.
+ * Filed together only because they arrive in the same array.
+ *
+ * Told apart by the guard's own phrasing. Every repair it writes says
+ * something was put back, restored, dropped, or is not in the profile —
+ * they are templates in tailorGuard and honesty, not free text. Anything else
+ * came from the model and is about the resume or the posting.
+ *
+ * A wrong guess is survivable in one direction only, which is why the test is
+ * written round the app's words rather than the model's: a model warning
+ * misfiled as an app note still shows, one line lower. An app note misfiled as
+ * a verdict on the job puts "your own wording was put back" under a heading
+ * about whether to apply.
+ */
+const THE_APP_DID_THIS =
+  /\b(?:put back|putting back|restored|restoring|was dropped|were dropped|your own wording|not in your profile|has been put back|have been put back)\b/i;
+
+export function splitWarnings(warnings: string[]): { aboutTheApp: string[]; aboutTheJob: string[] } {
+  const aboutTheApp: string[] = [];
+  const aboutTheJob: string[] = [];
+  for (const line of warnings) (THE_APP_DID_THIS.test(line) ? aboutTheApp : aboutTheJob).push(line);
+  return { aboutTheApp, aboutTheJob };
+}

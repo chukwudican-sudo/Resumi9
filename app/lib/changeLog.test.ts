@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { asLines, mendSplitLines, storedLines, withoutOrderTalk } from './changeLog';
+import { asLines, mendSplitLines, splitWarnings, storedLines, withoutOrderTalk } from './changeLog';
 
 // ── asLines ────────────────────────────────────────────────────────────────
 //
@@ -133,4 +133,45 @@ test('what the model actually did is kept', () => {
 test('a warning worth reading survives', () => {
   const warnings = ['Check the Droady dates before you send this — they overlap with Kudi Kitchen.'];
   assert.deepEqual(withoutOrderTalk(warnings), warnings);
+});
+
+// ── splitWarnings ──────────────────────────────────────────────────────────
+//
+// One field, two unrelated kinds of sentence, one box at the bottom of the
+// column called "Worth checking". All four below are real.
+
+test('a verdict on the posting is about the job', () => {
+  const warnings = [
+    "This candidate's background is entirely software engineering with no CAD, CATIA, or mechanical engineering evidence in the provided structure.",
+    'Resume lists no direct experience with Adobe Creative Suite, Figma, or project management tools like Jira.',
+  ];
+  assert.deepEqual(splitWarnings(warnings).aboutTheJob, warnings);
+  assert.deepEqual(splitWarnings(warnings).aboutTheApp, []);
+});
+
+test('the guard reporting itself is about the app', () => {
+  const warnings = [
+    'A rewritten bullet claims "python", which this bullet does not say, so your own wording was put back.',
+    '8 of your skills were missing from the tailored version and have been put back.',
+    'The tailoring dropped your Wealth Manager at Aegon and it has been put back as your profile has it.',
+  ];
+  assert.deepEqual(splitWarnings(warnings).aboutTheApp, warnings);
+  assert.deepEqual(splitWarnings(warnings).aboutTheJob, []);
+});
+
+test('a mixed list is sorted, keeping each side in order', () => {
+  const { aboutTheApp, aboutTheJob } = splitWarnings([
+    'No AWS experience appears anywhere in the profile.',
+    'Your certifications were missing and have been put back.',
+    'This posting targets PhD candidates with hands-on ML training.',
+  ]);
+  assert.deepEqual(aboutTheJob, [
+    'No AWS experience appears anywhere in the profile.',
+    'This posting targets PhD candidates with hands-on ML training.',
+  ]);
+  assert.deepEqual(aboutTheApp, ['Your certifications were missing and have been put back.']);
+});
+
+test('an empty list splits into two empty lists', () => {
+  assert.deepEqual(splitWarnings([]), { aboutTheApp: [], aboutTheJob: [] });
 });
