@@ -22,11 +22,21 @@ export default function StrengthenPanel({
   applicationId,
   missingCount,
   onImproved,
+  compact = false,
 }: {
   applicationId: string;
   missingCount: number;
   /** Re-tailors. Resolves false when the re-tailor itself failed. */
   onImproved: () => Promise<boolean> | void;
+  /**
+   * One line at rest instead of a card.
+   *
+   * Only the RESTING state changes. Opened, it is the same panel either way —
+   * the questions need the room. What it saves is a heading, a sentence and a
+   * full-width button sitting between the match score and the rules for
+   * somebody who is not going to answer any questions right now.
+   */
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState<'closed' | 'loading' | 'open' | 'saving'>('closed');
@@ -155,13 +165,34 @@ export default function StrengthenPanel({
     );
   }
 
+  const invitation =
+    missingCount > 0
+      ? `A few questions would close ${missingCount === 1 ? 'the gap' : 'these gaps'}`
+      : 'A few questions would make this stronger';
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={load}
+        disabled={state === 'loading'}
+        className="flex w-full items-center justify-between gap-3 rounded-md border border-rule bg-ground-surface px-[18px] py-3 text-left text-[13.5px] text-ink-prose transition hover:border-accent disabled:opacity-60"
+      >
+        <span>{invitation}</span>
+        {state === 'loading' ? (
+          <span className="flex shrink-0 items-center gap-2 text-[12px] text-ink-muted">
+            <Spinner /> Working it out…
+          </span>
+        ) : (
+          <span className="shrink-0 text-[12px] text-accent">Show me</span>
+        )}
+      </button>
+    );
+  }
+
   return (
     <div className="rounded-md border border-rule bg-ground-surface p-[18px]">
-      <span className="text-[14px] text-ink">
-        {missingCount > 0
-          ? `A few questions would close ${missingCount === 1 ? 'the gap' : 'these gaps'}`
-          : 'A few questions would make this stronger'}
-      </span>
+      <span className="text-[14px] text-ink">{invitation}</span>
       <p className="mt-1.5 text-[13px] leading-snug text-ink-muted">
         About this job specifically &mdash; usually three, and they take a minute.
       </p>

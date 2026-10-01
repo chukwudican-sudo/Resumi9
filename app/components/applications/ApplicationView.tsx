@@ -85,6 +85,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
   /** The gaps and the sentence explaining them, folded shut until asked for. */
   const [showGaps, setShowGaps] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [showLog, setShowLog] = useState(false);
   const [editsLeft, setEditsLeft] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -341,13 +342,31 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                 ? `What changed · ${resume.log.length} ${resume.log.length === 1 ? 'edit' : 'edits'}`
                 : 'What changed'}
             </span>
+            {/*
+              Three lines, then the rest on request.
+
+              A tailor writes eight or more and they filled the column — every
+              one true, none of them urgent. The first three are the ones that
+              changed the resume most, because the guard's repairs lead and the
+              model's own account follows.
+            */}
             {resume.log.length ? (
               <div className="mt-4 flex flex-col gap-3">
-                {resume.log.map((line, i) => (
+                {(showLog ? resume.log : resume.log.slice(0, 3)).map((line, i) => (
                   <div key={i} className="border-l-2 border-rule pl-3">
                     <span className="text-[12.5px] leading-relaxed text-ink-prose">{line}</span>
                   </div>
                 ))}
+                {resume.log.length > 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowLog((open) => !open)}
+                    aria-expanded={showLog}
+                    className="self-start text-[12.5px] text-accent transition hover:text-accent-hover"
+                  >
+                    {showLog ? 'Show fewer' : `${resume.log.length - 3} more`}
+                  </button>
+                ) : null}
               </div>
             ) : (
               <p className="mt-4 text-[12.5px] leading-relaxed text-ink-muted">
@@ -610,6 +629,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                       applicationId={applicationId}
                       missingCount={resume.missingRequirements.length}
                       onImproved={tailor}
+                      compact
                     />
                   ) : null}
 
