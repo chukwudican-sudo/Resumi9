@@ -114,6 +114,16 @@ const MIN_PROJECTS = 2;
  */
 const MIN_SKILL_LINES = 3;
 
+/**
+ * The most skills lines a resume prints, page count or no page count.
+ *
+ * Five, which is the number the person's own rule asks for. Not four, which
+ * the bug report suggested: the acceptance test it was written against says
+ * five or fewer, and a cap tighter than the thing it is measured by would be
+ * the app overruling them for no reason it could name.
+ */
+const MAX_SKILL_LINES = 5;
+
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
   target: number;
@@ -359,25 +369,9 @@ function usableCuts(
    * page, and a job is the dearest; the fitter was spending them the wrong way
    * round because this was the only one it could not reach.
    */
-  const lines = (structure.skills ?? []).map((group, i) => {
-    const items = String(group?.items ?? '')
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean);
-    // The category name counts too: a line headed "AI & Data" on a posting
-    // that says AI all the way through is relevant whatever its items are.
-    const wanted = [group?.category ?? '', ...items].filter((t) => t.trim());
-    const answers = posting.trim()
-      ? wanted.filter((term) => waysOfWriting(term).some((way) => patternFor(way).test(posting))).length
-      : 0;
-    return { i, answers, name: group?.category || 'a skills line' };
-  });
-  const sheddable = lines.length - MIN_SKILL_LINES;
+  const sheddable = (structure.skills ?? []).length - MIN_SKILL_LINES;
   if (sheddable > 0) {
-    [...lines]
-      // Fewest answers first; ties broken by position, so the lines a person
-      // put last go before the ones they led with.
-      .sort((a, b) => a.answers - b.answers || b.i - a.i)
+    weakestLines(structure, posting)
       .slice(0, sheddable)
       .forEach((line) => usable.push({ section: 'skills', index: line.i, text: null, name: line.name }));
   }
@@ -419,6 +413,78 @@ function usableCuts(
   }
 
   return { cuts: usable, ranked };
+}
+
+/**
+ * The skills lines, least relevant to this posting first.
+ *
+ * Scored on how little of the posting the line answers — the one relevance
+ * judgement the app can make for itself rather than asking the model for. A
+ * line naming nothing the employer asked for is the cheapest thing on the
+ * page and a job is the dearest; the fitter was spending them the wrong way
+ * round because a skills line was the only thing it could not reach.
+ *
+ * Shared by the two places that spend a line: the hard cap, which runs on
+ * every resume, and the cut list, which runs only when the page is over. One
+ * ranking, so they cannot disagree about which line matters least.
+ */
+function weakestLines(
+  structure: ResumeStructure,
+  posting: string,
+): { i: number; answers: number; name: string }[] {
+  return (structure.skills ?? [])
+    .map((group, i) => {
+      const items = String(group?.items ?? '')
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      // The category name counts too: a line headed "AI & Data" on a posting
+      // that says AI all the way through is relevant whatever its items are.
+      const wanted = [group?.category ?? '', ...items].filter((t) => t.trim());
+      const answers = posting.trim()
+        ? wanted.filter((term) => waysOfWriting(term).some((way) => patternFor(way).test(posting))).length
+        : 0;
+      return { i, answers, name: group?.category || 'a skills line' };
+    })
+    // Fewest answers first; ties broken by position, so the lines a person put
+    // last go before the ones they led with.
+    .sort((a, b) => a.answers - b.answers || b.i - a.i);
+}
+
+/**
+ * The skills section, capped, whatever the page count says.
+ *
+ * Measured on eleven real resumes: when the page was over, the fitter trimmed
+ * skills to three; when it fitted, the model's own line count survived — five
+ * or six, the same items reordered. So the length of the longest section on
+ * the page was decided by whether something ELSE ran long, which is not a
+ * decision anybody made. The person's own rule asks for five or fewer.
+ *
+ * Pins win over the cap: a line somebody marked "always include" stays even
+ * when that leaves six. They asked, and the cap is the app's own judgement.
+ */
+function cappedSkills(
+  structure: ResumeStructure,
+  posting: string,
+  pinned: readonly Pin[],
+): { structure: ResumeStructure; dropped: string[] } {
+  const lines = structure.skills ?? [];
+  if (lines.length <= MAX_SKILL_LINES) return { structure, dropped: [] };
+
+  const spare = lines.length - MAX_SKILL_LINES;
+  const gone = new Set<number>();
+  for (const line of weakestLines(structure, posting)) {
+    if (gone.size >= spare) break;
+    const without = { ...structure, skills: lines.filter((_, i) => i !== line.i && !gone.has(i)) };
+    if (missingPins(without, pinned).length) continue;
+    gone.add(line.i);
+  }
+  if (!gone.size) return { structure, dropped: [] };
+
+  return {
+    structure: { ...structure, skills: lines.filter((_, i) => !gone.has(i)) },
+    dropped: [...gone].map((i) => lines[i]?.category || 'a skills line'),
+  };
 }
 
 /** Entries dropped and bullets removed, by the positions already worked out. */
@@ -529,18 +595,6 @@ function describe(cuts: ResolvedCut[], target: number): string[] {
  * have worked — and cut nothing.
  */
 export async function fitToPages(structure: ResumeStructure, opts: FitOptions): Promise<FitResult> {
-  const unchanged = { structure, log: [] as string[], warnings: [] as string[], dropped: [] as DroppedEntry[] };
-
-  // No budget to measure, so nothing is known and nothing is claimed. A page
-  // rule reads as guidance on a resume whose length nobody counted.
-  if (!opts.affords()) return { ...unchanged, pages: null };
-
-  const pages = await opts.measure(structure);
-  if (pages === null) return { ...unchanged, pages: null };
-  if (pages <= opts.target) return { ...unchanged, pages };
-
-  const tooLong = `This runs to ${pagesWord(pages)} and your rules ask for ${pagesWord(opts.target)}.`;
-
   /*
    * What they said to keep, less whatever is already not here.
    *
@@ -553,6 +607,35 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
    */
   const pinned = (opts.pinned ?? []).filter((pin) => !missingPins(structure, [pin]).length);
   const breaks = (candidate: ResumeStructure) => missingPins(candidate, pinned);
+
+  /*
+   * The cap first, before anything is measured.
+   *
+   * It is not a page decision and must not wait on one: measured across
+   * eleven real resumes, the ones that ran long had skills trimmed to three
+   * and the ones that fitted kept whatever the model returned — five or six.
+   * The longest section on the page was sized by whether something else ran
+   * over, which is nobody's decision.
+   */
+  const capped = cappedSkills(structure, opts.posting ?? '', pinned);
+  structure = capped.structure;
+  const capLog = capped.dropped.length
+    ? [
+        `Technical Skills was ${capped.dropped.length + MAX_SKILL_LINES} lines; your rules ask for ${MAX_SKILL_LINES} or fewer, so ` +
+          `${capped.dropped.join(', ')} ${capped.dropped.length === 1 ? 'went' : 'went'} — ${capped.dropped.length === 1 ? 'the line' : 'the lines'} this posting mentions least.`,
+      ]
+    : [];
+  const unchanged = { structure, log: capLog, warnings: [] as string[], dropped: [] as DroppedEntry[] };
+
+  // No budget to measure, so nothing is known and nothing is claimed. A page
+  // rule reads as guidance on a resume whose length nobody counted.
+  if (!opts.affords()) return { ...unchanged, pages: null };
+
+  const pages = await opts.measure(structure);
+  if (pages === null) return { ...unchanged, pages: null };
+  if (pages <= opts.target) return { ...unchanged, pages };
+
+  const tooLong = `This runs to ${pagesWord(pages)} and your rules ask for ${pagesWord(opts.target)}.`;
 
   const all = usableCuts(structure, opts.cuts, opts.posting ?? '');
   const ranked = all.ranked;
@@ -658,7 +741,7 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   return {
     structure: best.structure,
     pages: best.pages,
-    log: describe(best.cuts, opts.target),
+    log: [...capLog, ...describe(best.cuts, opts.target)],
     warnings: [],
     // Read off the ORIGINAL structure, by the position each cut recorded, so
     // what is kept is the entry as the reader would have seen it.

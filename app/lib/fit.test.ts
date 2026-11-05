@@ -896,3 +896,91 @@ test('a pinned entry is never dropped, whatever the model ranked first', async (
   assert.ok(result.structure.experience.some((e) => e.org === 'Kudi Kitchen'));
   assert.equal(result.pages, 1, 'and it still fits, because something unpinned gave');
 });
+
+// ── the cap ────────────────────────────────────────────────────────────────
+//
+// Measured across eleven real resumes: the ones that ran long had skills
+// trimmed to three, and the ones that fitted kept whatever the model returned
+// — five or six, the same items reordered under new headings. The longest
+// section on the page was sized by whether something ELSE ran over.
+
+const SIX: ResumeStructure = {
+  ...RESUME,
+  skills: [
+    { category: 'Languages', items: 'Java, TypeScript' },
+    { category: 'Frontend', items: 'React, Figma' },
+    { category: 'AI & Data', items: 'Prompt Engineering' },
+    { category: 'Office', items: 'Excel, PowerPoint' },
+    { category: 'Tools', items: 'Git, Docker' },
+    { category: 'Other', items: 'Scrum, SDLC' },
+  ],
+};
+
+test('six skills lines are capped at five on a resume that already fits', async () => {
+  const meter = byLines(100);
+  const result = await fitToPages(SIX, {
+    target: 1,
+    cuts: [],
+    posting: 'Java, TypeScript, React, Figma, Prompt Engineering, Git, Docker.',
+    measure: meter.measure,
+    affords: always,
+  });
+
+  assert.equal(result.pages, 1, 'it was never over the limit');
+  assert.equal((result.structure.skills ?? []).length, 5);
+  const kept = (result.structure.skills ?? []).map((g) => g.category);
+  assert.equal(kept.includes('Other'), false, `the line the posting never mentions goes; kept ${kept.join(', ')}`);
+  assert.match(result.log[0] ?? '', /Technical Skills was 6 lines/);
+});
+
+test('five lines are left alone', async () => {
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [],
+    posting: 'Nothing matches.',
+    measure: byLines(100).measure,
+    affords: always,
+  });
+  assert.equal((result.structure.skills ?? []).length, 5);
+  assert.deepEqual(result.log, [], 'and nothing is claimed about them');
+});
+
+test('a pinned line beats the cap', async () => {
+  // They asked. The cap is the app's own judgement and loses to theirs.
+  const result = await fitToPages(SIX, {
+    target: 1,
+    cuts: [],
+    pinned: [
+      { place: 'skills', text: 'Other', label: 'the Other line' },
+      { place: 'skills', text: 'Office', label: 'the Office line' },
+    ],
+    posting: 'Java and React only.',
+    measure: byLines(100).measure,
+    affords: always,
+  });
+  const kept = (result.structure.skills ?? []).map((g) => g.category);
+  assert.ok(kept.includes('Other') && kept.includes('Office'), `kept ${kept.join(', ')}`);
+  assert.equal(kept.length, 5, 'the cap still takes the one unpinned line it can');
+});
+
+test('the cap applies before the page is measured, not after', async () => {
+  // The whole point: it is not a page decision. The meter here would never
+  // ask for a cut, and the cap happens anyway.
+  const meter = byLines(100);
+  await fitToPages(SIX, {
+    target: 2, cuts: [], posting: 'Java.', measure: meter.measure, affords: always,
+  });
+  assert.equal(meter.seen.length, 1, 'measured once, on the capped resume');
+});
+
+test('a resume that is also over the page keeps both accounts', async () => {
+  const result = await fitToPages(SIX, {
+    target: 1,
+    cuts: [],
+    posting: 'Java, TypeScript, React.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.match(result.log[0] ?? '', /Technical Skills was 6 lines/);
+  assert.ok(result.log.some((l) => /to fit one page/.test(l)), `log was ${JSON.stringify(result.log)}`);
+});
