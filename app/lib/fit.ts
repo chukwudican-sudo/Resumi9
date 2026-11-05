@@ -1,3 +1,4 @@
+import { missingPins, pinnedOverLine, type Pin } from './pins';
 import type { CutTarget } from './provenance';
 import { patternFor, waysOfWriting } from './requirementMatch';
 import type { ResumeStructure } from './types';
@@ -133,6 +134,16 @@ export interface FitOptions {
    * reverse is a different one that only looks the same.
    */
   posting?: string;
+  /**
+   * What the person said to keep, and the fitter may not spend.
+   *
+   * Everything this file cuts, it chose on its own. None of that knows what
+   * somebody typed in the change box, so a job could be dropped, asked for
+   * back, and dropped again by the next fit — the second time after they had
+   * said not to. A pin is the answer and the page rule is what gives: see
+   * pins.ts, and `pinnedOverLine` for what gets said when it does.
+   */
+  pinned?: readonly Pin[];
   /** Compiles and counts. Null when it could not be measured at all. */
   measure: (structure: ResumeStructure) => Promise<number | null>;
   /**
@@ -529,12 +540,35 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   if (pages <= opts.target) return { ...unchanged, pages };
 
   const tooLong = `This runs to ${pagesWord(pages)} and your rules ask for ${pagesWord(opts.target)}.`;
-  const { cuts, ranked } = usableCuts(structure, opts.cuts, opts.posting ?? '');
+
+  /*
+   * What they said to keep, less whatever is already not here.
+   *
+   * A pin is kept with the application and this resume is rebuilt from the
+   * profile every time, so a pin can outlive the thing it named: a bullet the
+   * tailor has since reworded, a skill taken out of the profile, a job
+   * deleted. A pin the resume does not already keep is not something the
+   * fitter can break, and treating it as one would report a page rule as
+   * unmeetable on every future tailor for a sentence nobody could satisfy.
+   */
+  const pinned = (opts.pinned ?? []).filter((pin) => !missingPins(structure, [pin]).length);
+  const breaks = (candidate: ResumeStructure) => missingPins(candidate, pinned);
+
+  const all = usableCuts(structure, opts.cuts, opts.posting ?? '');
+  const ranked = all.ranked;
+  // Cuts that would spend a pin, taken off the table before anything is
+  // measured. Each is judged on its own, which is exact for every pin naming
+  // one thing in one place; the search below re-checks the set it settles on.
+  const cuts = pinned.length ? all.cuts.filter((cut) => !breaks(applyCuts(structure, [cut])).length) : all.cuts;
   if (!cuts.length) {
     return {
       ...unchanged,
       pages,
-      warnings: [`${tooLong} There was nothing safe to cut, so it was left as it is.`],
+      warnings: [
+        pinned.length
+          ? `${tooLong} Everything left to cut is something you asked to keep, so it was left as it is.`
+          : `${tooLong} There was nothing safe to cut, so it was left as it is.`,
+      ],
     };
   }
 
@@ -542,8 +576,21 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   // will, and the person keeps their full resume rather than a shortened one
   // that still breaks the rule.
   if (!opts.affords()) return { ...unchanged, pages };
+  /*
+   * Measured, unless it spends a pin — in which case it did not fit.
+   *
+   * The per-cut filter above catches every pin that names one thing in one
+   * place, which is all of them in practice. This is for the one that does
+   * not: a tool listed on two skills lines, where dropping either line alone
+   * keeps it and dropping both does not. "Did not fit" is already how a
+   * candidate gets rejected everywhere below, so the awkward case needs no
+   * second code path.
+   */
+  const measureKeeping = async (candidate: ResumeStructure) =>
+    breaks(candidate).length ? null : opts.measure(candidate);
+
   const most = applyCuts(structure, cuts);
-  const mostPages = await opts.measure(most);
+  const mostPages = await measureKeeping(most);
   if (mostPages === null || mostPages > opts.target) {
     return {
       ...unchanged,
@@ -556,8 +603,17 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
        * "nothing was cut" left somebody staring at a rule their resume cannot
        * meet with no idea what to try next.
        */
+      /*
+       * Two different sentences, because there are two different situations
+       * and only one of them is the person's problem to solve. Pinned content
+       * that will not fit is the app keeping a promise — it says which promise
+       * and that the rule is what gave, rather than sending them off to take
+       * something off a resume they already told it what to keep on.
+       */
       warnings: [
-        `${tooLong} Even cutting everything least relevant to this posting, it will not fit — there is too much on it. Two pages, or take something off yourself.`,
+        pinned.length
+          ? `${tooLong} ${pinnedOverLine(pinned, pages, opts.target)}`
+          : `${tooLong} Even cutting everything least relevant to this posting, it will not fit — there is too much on it. Two pages, or take something off yourself.`,
       ],
     };
   }
@@ -571,7 +627,7 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
     const mid = Math.floor((lo + hi) / 2);
     const taken = cuts.slice(0, mid);
     const trial = applyCuts(structure, taken);
-    const measured = await opts.measure(trial);
+    const measured = await measureKeeping(trial);
     if (measured !== null && measured <= opts.target) {
       best = { structure: trial, pages: measured, cuts: taken };
       hi = mid - 1;

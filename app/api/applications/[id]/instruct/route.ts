@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '../../../../lib/anthropic';
 import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { readInstruction } from '../../../../lib/asked';
+import { pinEntry, readPins, samePin, type Pin } from '../../../../lib/pins';
 import { asLines, withoutOrderTalk } from '../../../../lib/changeLog';
 import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
@@ -45,9 +46,15 @@ const FREE_EDITS = 10;
  * The resume is very likely longer than the rule allows again — it was cut to
  * meet it. Their words win, so it goes back; saying nothing would let them
  * find out from a two-page PDF at the moment they send it.
+ *
+ * The second sentence used to read "tailoring again will cut it back to fit",
+ * which was true and was the whole problem: the thing it cut back was the
+ * thing they had just asked for. Asking for something back now pins it, so
+ * the next fit spends something else or says it cannot.
  */
 const PAGE_RULE_MAY_BREAK =
-  'This is likely over the page limit in your rules again. Tailoring again will cut it back to fit.';
+  'This is likely over the page limit in your rules again. It is pinned now, so tailoring again will take ' +
+  'something else off to make room rather than this — and tell you if it cannot.';
 
 const ORDER_IS_LOCAL = 'This order applies to this resume. Tailoring again rebuilds from your profile and puts it back.';
 
@@ -136,6 +143,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const posting = record.posting;
 
   /*
+   * What this sentence promises to keep, added to what the application already
+   * promised.
+   *
+   * Read here, before anything else is decided, because every branch below
+   * saves a version and all of them have to carry it: the pin is for the NEXT
+   * tailor, which is the fit that would otherwise take the same thing off a
+   * second time. A restore is itself a promise and is pinned where it happens.
+   */
+  const promised = (current.pins as Pin[]) ?? [];
+  const alsoPinned = (more: readonly Pin[]) => {
+    const out = [...promised];
+    for (const pin of more) {
+      if (!out.some((p) => p.place === pin.place && samePin(p.text, pin.text))) out.push(pin);
+    }
+    return out;
+  };
+  const pins = alsoPinned(readPins(answer ? `${answer} ${instruction}` : instruction, structure));
+
+  /*
    * Ids on the version being edited, so an edit can be checked the same way a
    * tailor is.
    *
@@ -206,6 +232,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       estimatedPages: current.estimatedPages,
       // Off the list, so it is not offered back a second time.
       dropped: kept.filter((d) => !back.has(`${d.section}:${d.index}`)),
+      /*
+       * Asking for something back is the clearest possible way of saying keep
+       * it. Without this the next tailor takes it off again — the same job,
+       * for the same reason, one version after they told the app otherwise.
+       */
+      pins: alsoPinned(restore.entries.map((e) => pinEntry(e.section, e.name))),
       mode: 'instructed',
     });
     return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
@@ -246,6 +278,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       missingRequirements: (current.missingRequirements as string[]) ?? [],
       log: [`You asked: "${instruction}"`, moveLine(move), ORDER_IS_LOCAL],
       warnings: [],
+      pins,
       estimatedPages: current.estimatedPages,
       dropped: (current.dropped as unknown[]) ?? [],
       mode: 'instructed',
@@ -478,6 +511,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // Carried, not recomputed: an edit cuts nothing, and a list that stopped
       // at the version it was made on would be gone by the next question.
       dropped: kept.filter((d) => !putBack.has(`${d.section}:${d.index}`)),
+      /*
+       * What the sentence said to keep, and anything it asked back.
+       *
+       * Both are promises about the next fit, and this branch is where most of
+       * them arrive: a sentence that asks for something back AND says
+       * something else is handled here rather than in the restore-only branch
+       * above.
+       */
+      pins: restore ? alsoPinned([...readPins(instruction, structure), ...restore.entries.map((e) => pinEntry(e.section, e.name))]) : pins,
       mode: 'instructed',
     });
 

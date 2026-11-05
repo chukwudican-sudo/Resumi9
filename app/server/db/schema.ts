@@ -399,6 +399,19 @@ export const resumes = pgTable('resumes', {
    * business and is not offered back.
    */
   dropped: jsonb('dropped').notNull().default([]),
+  /**
+   * What the person said to keep, and the fitter may not spend.
+   *
+   * Kept with the application rather than with the version that read it,
+   * because the promise is about the role, not about one page: a pin typed
+   * into the change box has to survive the next tailor, which is the fit that
+   * would otherwise take the same thing off a second time. Carried forward on
+   * every save for the same reason `dropped` is.
+   *
+   * Nothing global lives here. "Keep Aegon on everything" is a rule, and rules
+   * have their own table; this is one application's worth of promises.
+   */
+  pins: jsonb('pins').notNull().default([]),
   version: integer('version').notNull().default(1),
   parentResumeId: text('parent_resume_id'),
   /** running | complete | failed — what the recovery banner reads instead of localStorage. */

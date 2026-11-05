@@ -14,12 +14,14 @@ import { asLines } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
+import type { Pin } from '../../../../lib/pins';
 import { COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
 import { pageTarget, type RuleCheck } from '../../../../lib/rules';
 import {
   getActiveRules,
   getUser,
   getApplication,
+  getLatestResume,
   getProfile,
   getSupportingFacts,
   refundCredit,
@@ -59,7 +61,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     return errorResponse({ type: 'auth', message: 'Your API key may be invalid or out of credits.' }, 500);
   }
 
-  const [record, profile, rules, user, supporting] = await Promise.all([
+  const [record, profile, rules, user, supporting, lastVersion] = await Promise.all([
     getApplication(userId, params.id),
     getProfile(userId),
     getActiveRules(userId),
@@ -68,6 +70,14 @@ export async function POST(_request: Request, { params }: { params: { id: string
     // written and never read: somebody answered three questions about their
     // achievements, paid a credit to re-tailor, and got the same resume back.
     getSupportingFacts(userId),
+    /*
+     * What they have already asked this application to keep.
+     *
+     * A tailor rebuilds from the profile, so without this the fitter arrives
+     * knowing nothing: it would take off the job somebody restored by hand
+     * one version ago, which is the loop this closes.
+     */
+    getLatestResume(userId, params.id),
   ]);
 
   if (!record) return errorResponse({ type: 'generic', message: 'Application not found.' }, 404);
@@ -280,6 +290,8 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // the app can score itself — by how many of its own tools this employer
       // actually mentions, read off the posting's whole text.
       posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+      // Their promises, read off the version they made them on.
+      pinned: ((lastVersion?.pins as Pin[]) ?? []).filter((pin) => pin && pin.place && pin.text),
       /*
        * The model's ranking, followed to the sentences that actually survived.
        *

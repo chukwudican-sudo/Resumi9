@@ -709,3 +709,135 @@ test('dropped skills lines are named in the log', async () => {
     `log was ${JSON.stringify(result.log)}`,
   );
 });
+
+// ── pins ───────────────────────────────────────────────────────────────────
+//
+// What the person said to keep. Everything this file cuts it chose itself, so
+// before pins a job could be dropped, asked for back in the change box, and
+// dropped again by the next fit — the second time after they had said not to.
+
+const PINNED: ResumeStructure = {
+  ...RESUME,
+  skills: [
+    { category: 'Languages', items: 'Java, TypeScript' },
+    { category: 'Frontend', items: 'React, Figma' },
+    { category: 'AI & Data', items: 'Prompt Engineering' },
+    { category: 'Office', items: 'Excel, PowerPoint' },
+    { category: 'Tools', items: 'Git, Docker' },
+  ],
+};
+
+test('a pinned job is not dropped, and something else goes instead', async () => {
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    // Kudi Kitchen is the last job, so it is what the fallback would take.
+    cuts: [drop('experience', 'Kudi Kitchen', 'Jan 2024 – Aug 2024')],
+    pinned: [{ place: 'experience', text: 'Kudi Kitchen', label: 'Kudi Kitchen' }],
+    posting: 'Nothing matches.',
+    measure: andSkills(19),
+    affords: always,
+  });
+
+  assert.ok(
+    result.structure.experience.some((e) => e.org === 'Kudi Kitchen'),
+    'the job they asked to keep is still there',
+  );
+  assert.equal(result.pages, 1, 'and it still fits, because a skills line went');
+});
+
+test('a pinned skills line is not the one that goes', async () => {
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [],
+    // Office answers nothing in the posting, so it is first in line to go.
+    pinned: [{ place: 'skills', text: 'Office', label: 'the Office line' }],
+    posting: 'Java and React.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  const kept = (result.structure.skills ?? []).map((g) => g.category);
+  assert.ok(kept.includes('Office'), `Office was pinned; kept ${kept.join(', ')}`);
+});
+
+test('a pinned tool keeps the line it sits on', async () => {
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [],
+    pinned: [{ place: 'skills', text: 'Docker', label: 'Docker' }],
+    posting: 'Java, TypeScript, React, Figma, Prompt Engineering.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.ok(
+    (result.structure.skills ?? []).some((g) => /Docker/.test(g.items)),
+    'the line holding the pinned tool survives',
+  );
+});
+
+test('a pinned bullet is not trimmed', async () => {
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [cut('job four')],
+    pinned: [{ place: 'bullet', text: 'job four', label: 'that bullet' }],
+    posting: 'Nothing matches.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.ok(bulletsOf(result.structure).includes('job four'), 'the pinned sentence is still on the page');
+});
+
+test('when the pin cannot fit, the page rule gives and says so', async () => {
+  // Every job pinned, so nothing an entry cut could reach is available, and
+  // the meter is set so that trimming and skills together are not enough.
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [],
+    pinned: [
+      { place: 'experience', text: 'Droady', label: 'Droady' },
+      { place: 'experience', text: 'Kudi Kitchen', label: 'Kudi Kitchen' },
+      { place: 'projects', text: 'FraudWatch', label: 'FraudWatch' },
+      { place: 'projects', text: 'MealApp', label: 'MealApp' },
+    ],
+    posting: 'Nothing matches.',
+    measure: andSkills(8),
+    affords: always,
+  });
+
+  assert.equal(result.structure.experience.length, 2, 'nothing pinned was dropped');
+  assert.equal(result.structure.projects.length, 2);
+  assert.equal(result.log.length, 0, 'and nothing claims to have been cut');
+  assert.match(result.warnings[0] ?? '', /You asked to keep/);
+  assert.match(result.warnings[0] ?? '', /the page rule is the one that gives/);
+});
+
+test('a pin for something already gone is ignored', async () => {
+  /*
+   * Pins are kept with the application and the resume is rebuilt from the
+   * profile every time, so a pin outlives what it named: a bullet since
+   * reworded, a skill taken out of the profile, a job deleted. Treated as
+   * breakable, it would report the page rule as unmeetable on every later
+   * tailor over a sentence nothing could satisfy.
+   */
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [],
+    pinned: [{ place: 'experience', text: 'A job they deleted', label: 'A job they deleted' }],
+    posting: 'Java and React.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.equal(result.pages, 1);
+  assert.equal(result.warnings.length, 0, 'no warning about a pin nothing could keep');
+  assert.ok(result.log.length > 0, 'and the fit went ahead as usual');
+});
+
+test('no pins at all behaves exactly as before', async () => {
+  const withNone = await fitToPages(PINNED, {
+    target: 1, cuts: [], posting: 'Java and React.', measure: andSkills(19), affords: always,
+  });
+  const withEmpty = await fitToPages(PINNED, {
+    target: 1, cuts: [], pinned: [], posting: 'Java and React.', measure: andSkills(19), affords: always,
+  });
+  assert.deepEqual(withEmpty.log, withNone.log);
+  assert.deepEqual((withEmpty.structure.skills ?? []).map((g) => g.category), (withNone.structure.skills ?? []).map((g) => g.category));
+});

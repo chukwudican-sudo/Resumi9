@@ -1988,6 +1988,13 @@ export async function saveResume(
      * gone by the time anybody asked for something back.
      */
     dropped?: unknown[];
+    /**
+     * What they said to keep. Carried on every save like `dropped`, and for
+     * the same reason: the promise belongs to the application, and a list that
+     * stopped at the version that read it would be gone by the next tailor —
+     * which is exactly the fit it exists to constrain.
+     */
+    pins?: unknown[];
     /** 'instructed' when this version came from somebody's own instruction. */
     mode?: string;
   },
@@ -2008,6 +2015,15 @@ export async function saveResume(
     estimatedPages: data.estimatedPages,
     pageCount: data.pageCount ?? null,
     dropped: data.dropped ?? [],
+    /*
+     * Carried forward unless this save says otherwise.
+     *
+     * The other way round — resetting when a caller forgets — loses a promise
+     * silently, and the thing a lost pin does is let the next fit take off
+     * what somebody asked to keep. There is no save for which forgetting is
+     * the safer default.
+     */
+    pins: data.pins ?? ((previous?.pins as unknown[]) ?? []),
     version: (previous?.version ?? 0) + 1,
     parentResumeId: previous?.id ?? null,
     status: 'complete',
