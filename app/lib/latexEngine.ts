@@ -209,35 +209,26 @@ export function linkText(url: string): string {
 }
 
 /**
- * The heading, in two deliberate lines.
+ * The heading, on one line.
  *
- * How to reach them on the first — phone, email, their own site — and the
- * profiles somebody looks up on the second. It was one line that wrapped
- * wherever it ran out of room, which put the break in a different place for
- * every person depending on how long their handle happened to be. Two lines
- * chosen is steadier than one line left to chance, and the arrangement is the
- * same on every resume the app makes.
+ * It was split in two — how to reach them above, profiles below — and that
+ * was the right shape while the profiles printed as full addresses, which
+ * were long enough to wrap in a different place for every person. Labelled,
+ * the whole header is five short items and a forced break only buys a second
+ * line of white space at the top of a page that is short of room.
  *
- * Either line can be empty and neither prints a separator it does not need:
- * somebody with no website and no GitHub gets one line, not a blank second
- * one and a stray rule.
+ * Nothing prints a separator it does not need: somebody with no website and
+ * no GitHub gets their phone and their email, not a stray rule either side
+ * of a gap.
  *
  * \mbox around each address is load-bearing. A URL is full of hyphens and
- * slashes and LaTeX will break a line at any of them — "linkedin.com/in/
- * chukwudi-" split across two lines is worse than the label this replaced.
- * The separators stay breakable, so a line still too long for the page wraps
- * between addresses rather than inside one.
+ * slashes and LaTeX will break a line at any of them — "meetalexius." ending
+ * a line is the failure this prevents. The separators stay breakable, so a
+ * header too long for the page wraps between items rather than inside one.
  */
 function renderContact(c: ResumeStructure['contact']): string {
   const link = (url: string, shown: (url: string) => string) =>
     `\\mbox{\\href{${escapeLatex(withScheme(url))}}{\\underline{${escapeLatex(shown(url))}}}}`;
-
-  const reach = [
-    c.phone ? escapeLatex(c.phone) : '',
-    c.email ? `\\mbox{\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}}` : '',
-    // The website's own label is its host, so it is already as short as it gets.
-    c.website ? link(c.website, linkText) : '',
-  ].filter(Boolean);
 
   /*
    * Labelled, not spelled out.
@@ -246,13 +237,18 @@ function renderContact(c: ResumeStructure['contact']): string {
    * off paper, so the handle buys nothing and costs horizontal space on the
    * scarcest page in the app. The address is still in the PDF — four working
    * link annotations, verified — it is only the printed text that is short.
+   * The website is the exception: its label would be its host, so there is
+   * nothing left to shorten.
    */
-  const profiles = [
+  return [
+    c.phone ? escapeLatex(c.phone) : '',
+    c.email ? `\\mbox{\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}}` : '',
+    c.website ? link(c.website, linkText) : '',
     c.linkedin ? link(c.linkedin, linkLabel) : '',
     c.github ? link(c.github, linkLabel) : '',
-  ].filter(Boolean);
-
-  return [reach.join(' $|$ '), profiles.join(' $|$ ')].filter(Boolean).join(' \\\\ ');
+  ]
+    .filter(Boolean)
+    .join(' $|$ ');
 }
 
 /**

@@ -237,9 +237,9 @@ function run() {
    * Each address unbreakable, every separator still a breakpoint.
    *
    * A URL is full of hyphens and slashes and LaTeX will break a line at any
-   * of them: "linkedin.com/in/chukwudi-" ending a line is worse than the
-   * label was. Compiled against this real contact line, the header wraps
-   * between addresses and all three print whole.
+   * of them: "meetalexius." ending a line is the failure this prevents. The
+   * separators stay breakable, so a header too long for the page wraps
+   * between items rather than inside one.
    */
   const contactLine = header.split('\n').find((l) => l.includes('linkedin.com'))!;
   assert.strictEqual(
@@ -250,31 +250,36 @@ function run() {
   assert.match(contactLine, /\} \$\|\$ \\mbox/, 'and the separator between them stays a breakpoint');
 
   /*
-   * Two deliberate lines: how to reach them, then where to look them up.
+   * One line, in reading order. Compiled, this is:
    *
-   * One line that wrapped wherever it ran out of room put the break in a
-   * different place for every person, depending on how long their handle
-   * happened to be. Compiled, this reads:
+   *   905-922-5891 | chukwudi.can@gmail.com | meetalexius.com | LinkedIn | GitHub
    *
-   *   905-922-5891 | chukwudi.can@gmail.com | meetalexius.com
-   *   LinkedIn | GitHub
+   * It was two — reach above, profiles below — which was right while the
+   * profiles printed as full addresses. Labelled, a forced break only buys a
+   * second line of white space at the top of a page that is short of room.
    */
-  const [reach, profiles] = contactLine.split(/\s\\\\\s/);
-  assert.match(reach, /905-922-5891/);
-  assert.match(reach, /meetalexius\.com/);
-  assert.ok(!/linkedin|github/i.test(reach), 'the profiles are not on the first line');
-  assert.match(profiles, /\{\\underline\{LinkedIn\}\}/);
-  assert.match(profiles, /\{\\underline\{GitHub\}\}/);
+  assert.ok(!contactLine.includes('\\\\'), 'the header is one line, not two');
+  assert.strictEqual(
+    (contactLine.match(/\$\|\$/g) ?? []).length,
+    4,
+    'five items, four separators',
+  );
+  assert.match(
+    contactLine,
+    /905-922-5891 \$\|\$ .*a@example\.com.*\$\|\$ .*meetalexius\.com.*\$\|\$ .*LinkedIn.*\$\|\$ .*GitHub/,
+    'phone, email, site, then the two profiles',
+  );
 
-  // Either line can be empty, and neither prints a separator it does not need.
+  // Nothing prints a separator it does not need.
   const sparse = renderResumeLatex({ ...fixture, contact: { phone: '905-922-5891' } });
   const onlyLine = sparse.split('\n').find((l) => l.includes('905-922-5891'))!;
-  assert.ok(!onlyLine.includes('\\\\'), 'no blank second line for somebody with no profiles');
+  assert.ok(!onlyLine.includes('\\\\'), 'no forced break for somebody with nothing else');
   assert.ok(!onlyLine.includes('$|$'), 'and no stray separator');
 
   const noPhone = renderResumeLatex({ ...fixture, contact: { github: 'github.com/x' } });
   const githubOnly = noPhone.split('\n').find((l) => l.includes('github.com/x'))!;
-  assert.ok(!githubOnly.includes('\\\\'), 'nor an empty first line for somebody with only a profile');
+  assert.ok(!githubOnly.includes('\\\\'), 'nor for somebody with only a profile');
+  assert.ok(!githubOnly.includes('$|$'), 'nor a separator with nothing on the other side');
 
   // A project line is labelled for the same reason, and always was.
   assert.match(
