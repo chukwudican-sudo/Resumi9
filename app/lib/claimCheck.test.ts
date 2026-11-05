@@ -9,6 +9,7 @@ const bullet = (over: Partial<ResolvedBullet> = {}): ResolvedBullet => ({
   changed: true,
   from: [],
   evidence: [],
+  context: '',
   moved: false,
   unsourced: false,
   ...over,

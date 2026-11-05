@@ -84,6 +84,22 @@ export interface ResolvedBullet {
   from: string[];
   /** The source bullets and facts it named, in the entry it sits in. */
   evidence: string[];
+  /**
+   * What the entry itself says, beside its bullets.
+   *
+   * A project's "Built with" line is the tech it was built with, and a bullet
+   * on that project saying "in Python" is reporting it rather than claiming
+   * it. The honesty check read only the bullets and reverted exactly that —
+   * "in Python" taken off a project whose tech line says Python — which is
+   * the app calling a person a liar about a line it printed itself two
+   * centimetres higher.
+   *
+   * Deliberately NOT part of `evidence`: that is what a flagged bullet is
+   * reverted TO, and reverting a sentence to "Python, pytest, matplotlib,
+   * Git" would be worse than the flag it was fixing. This is read, never
+   * written back.
+   */
+  context: string;
   /** It named a source belonging to a different entry: a fact that moved. */
   moved: boolean;
   /** It named nothing that exists. */
@@ -194,6 +210,14 @@ export function resolveTailored(
       const resolved: string[] = [];
       /** This entry's own bullets, for recognising one that came back verbatim. */
       const here = [...index.bullets.values()].filter((b) => b.entry === entryId);
+      /*
+       * What the entry says about itself: its tech line, its title, its
+       * subject. Every bullet under it may draw on these without claiming
+       * anything new — the page already says them, right above.
+       */
+      const context = [entry?.tech, entry?.title, entry?.degree]
+        .filter((v: unknown) => typeof v === 'string' && v.trim())
+        .join(' \n ');
 
       for (const bullet of Array.isArray(entry?.bullets) ? entry.bullets : []) {
         if (typeof bullet === 'string') {
@@ -210,8 +234,8 @@ export function resolveTailored(
           resolved.push(written);
           bullets.push(
             same
-              ? { entry: entryId, text: written, changed: false, from: [same.id], evidence: [same.text], moved: false, unsourced: false }
-              : { entry: entryId, text: written, changed: true, from: [], evidence: [], moved: false, unsourced: true },
+              ? { entry: entryId, text: written, context, changed: false, from: [same.id], evidence: [same.text], moved: false, unsourced: false }
+              : { entry: entryId, text: written, context, changed: true, from: [], evidence: [], moved: false, unsourced: true },
           );
           continue;
         }
@@ -244,6 +268,7 @@ export function resolveTailored(
         resolved.push(text);
         bullets.push({
           entry: entryId,
+          context,
           text,
           // Sending the sentence back unchanged is not a rewrite, whether it
           // arrived with its id, with a `from`, or as a bare string.

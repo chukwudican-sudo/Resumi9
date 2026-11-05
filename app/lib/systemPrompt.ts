@@ -160,8 +160,25 @@ export function buildUserContext(opts: {
       // numbered list and no reason to read the numbers as rank. The person
       // orders the list themselves; this is the half that was missing.
       'They are listed in THEIR priority order: where two of these cannot both be',
-      'satisfied, the lower number wins.',
-      ...active.map((r, i) => `${i + 1}. ${r.text.trim()}`),
+      'satisfied, the earlier one wins.',
+      /*
+       * Labelled, because there were two lists numbered 1, 2, 3 in one prompt.
+       *
+       * A real edit said "Kudi Kitchen is required per rule 2". Their rule 2
+       * is about Aegon; UNIVERSAL rule 2 is "never change employer names" —
+       * two different sentences with the same address, and the model read
+       * across them. Nothing in the prompt had ever said which list a bare
+       * number meant.
+       *
+       * And when it mentions one to the person, it quotes the rule instead of
+       * citing a number: "rule 2" means nothing to somebody reading their own
+       * resume, who did not number anything.
+       */
+      ...active.map((r, i) => `YOUR RULE ${i + 1}: ${r.text.trim()}`),
+      '',
+      'Cite these as "your rule N" and the hardcoded ones as "universal rule N" — never a bare',
+      'number, which is ambiguous between the two lists. In anything the person reads, quote what',
+      'the rule says rather than its number: they wrote the sentence and did not number it.',
     );
   }
 

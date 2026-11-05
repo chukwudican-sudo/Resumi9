@@ -442,7 +442,12 @@ export function checkBullets(
      * Their words now sit beside the bullet's own, and only for the edit that
      * carries them — a tailor has no instruction and behaves exactly as before.
      */
-    const evidence = asked.words ? `${source} \n ${asked.words}` : source;
+    /*
+     * The entry's own lines count too. See ResolvedBullet.context: a bullet on
+     * a project whose tech line says Python is reporting Python, not claiming
+     * it, and "in Python" was being reverted off exactly that project.
+     */
+    const evidence = [source, bullet.context, asked.words].filter((part) => part?.trim()).join(' \n ');
     const fallback = bullet.evidence[0] ?? '';
 
     /*

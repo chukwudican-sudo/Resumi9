@@ -22,6 +22,7 @@ const bullet = (over: Partial<ResolvedBullet> = {}): ResolvedBullet => ({
   // cases about the sentences they were written for.
   from: [],
   evidence: [],
+  context: '',
   moved: false,
   unsourced: false,
   ...over,
@@ -771,4 +772,74 @@ test('a position claimed is still an invention, however ordinary the verb', () =
     [], undefined, undefined, 'You will manage the release process across teams.',
   );
   assert.equal(flags.length, 1, `managed is not did; got ${JSON.stringify(flags)}`);
+});
+
+// ── the entry's own lines are a source ─────────────────────────────────────
+//
+// From the Intel resume: "in Python" was reverted off a Rate Limit Lab
+// bullet, on a project whose Built-with line reads "Python, pytest,
+// matplotlib, Git". The app calling somebody a liar about a word it printed
+// itself two centimetres higher.
+
+test('a tool named on the entry’s tech line is not an invention', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Benchmarked a sliding window against a token bucket in Python, charting both',
+        evidence: ['Benchmarked a sliding window against a token bucket, charting both'],
+        context: 'Python, pytest, matplotlib, Git',
+      }),
+    ],
+    ['python'], undefined, undefined,
+    'Write clean, low-latency Python services. Python and pytest required.',
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('without the tech line it is still caught', () => {
+  // The check has not been widened, only given what the page already shows.
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Benchmarked a sliding window against a token bucket in Python, charting both',
+        evidence: ['Benchmarked a sliding window against a token bucket, charting both'],
+      }),
+    ],
+    ['python'], undefined, undefined,
+    'Write clean, low-latency Python services. Python and pytest required.',
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /python/i);
+});
+
+test('a job title is a source for what the job was', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Advised clients on wealth management as their wealth manager',
+        evidence: ['Advised clients on their portfolios'],
+        context: 'Wealth Manager (Client Services & Financial Planning)',
+      }),
+    ],
+    [], undefined, undefined, 'We are hiring a wealth manager for client services.',
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('the tech line is never what a bullet reverts to', () => {
+  // It is read, never written back: reverting a sentence to "Python, pytest,
+  // matplotlib, Git" would be worse than the flag it was fixing.
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Cut p99 latency under tight latency constraints',
+        evidence: ['Cut p99 latency'],
+        context: 'Python, pytest',
+      }),
+    ],
+    [], undefined, undefined,
+    'Solid grasp of model inference logic, input/output contracts, and latency constraints.',
+  );
+  assert.equal(flags.length, 1);
+  assert.equal(flags[0].revertTo, 'Cut p99 latency');
 });

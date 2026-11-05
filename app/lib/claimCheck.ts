@@ -99,7 +99,9 @@ export function claimCheckInput(bullets: readonly ResolvedBullet[]): {
 }[] {
   return bullets
     .filter((b) => b.changed && !b.unsourced && b.evidence.length && b.text.trim())
-    .map((b) => ({ bullet: b.text, sources: b.evidence }));
+    // The entry's own lines go with it, so the checker is not asked to judge a
+    // bullet against less than the page shows.
+    .map((b) => ({ bullet: b.text, sources: b.context.trim() ? [...b.evidence, b.context] : b.evidence }));
 }
 
 /** Letters, digits and single spaces — for comparing text that may be respaced. */
@@ -151,7 +153,7 @@ export function flagsFromVerdicts(
      * sources, or the evidence it claims to have weighed is its own invention
      * — and a check that can invent its evidence is worse than no check.
      */
-    const evidence = bullet.evidence.join(' \n ');
+    const evidence = [...bullet.evidence, bullet.context].filter((part) => part?.trim()).join(' \n ');
     if (!inside(bullet.text, said) || !inside(evidence, quote)) {
       discarded += 1;
       continue;

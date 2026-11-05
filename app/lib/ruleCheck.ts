@@ -1,6 +1,7 @@
 import type { ResumeStructure } from './types';
 import { contentFor, planSections } from './sections';
 import type { CheckableRule, RuleResult } from './rules';
+import { unmatchedNames } from './pins';
 
 /** A piece of free text, and enough about where it came from to go and fix it. */
 interface Located {
@@ -195,9 +196,19 @@ export function runChecks(
        * itself, and silence would hide it.
        */
       case 'always_include': {
-        const missing = rule.check.names.filter(
-          (name) => !fields.some((f) => mentions(f.text, name)),
-        );
+        /*
+         * Resolved the way the fitter resolves it, not by looking for the
+         * rule's own words in the resume.
+         *
+         * A rule reading "Always include the Aegon Wealth Manager experience
+         * entry" stores that whole phrase as its name. Searched for
+         * literally, it appears nowhere: the employer is "Aegon" and the
+         * title is "Wealth Manager (Client Services & Financial Planning)".
+         * So the panel on the application said Aegon and Droady were not on a
+         * resume carrying both — the app contradicting itself about the one
+         * thing it had promised to keep.
+         */
+        const missing = unmatchedNames(rule.check, structure);
         if (!missing.length) return { ...base, verdict: 'pass' };
         return {
           ...base,

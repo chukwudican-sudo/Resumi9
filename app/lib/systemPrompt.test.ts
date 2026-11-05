@@ -93,23 +93,40 @@ test('the resume belongs to whoever is named', () => {
   assert.match(anonymous, /this person/i);
 });
 
-test("personal rules are numbered and ranked below the universal ones", () => {
+test("personal rules are labelled, numbered and ranked below the universal ones", () => {
+  /*
+   * Labelled because there were two lists numbered 1, 2, 3 in one prompt.
+   *
+   * A real edit said "Kudi Kitchen is required per rule 2". Their rule 2 is
+   * about Aegon; UNIVERSAL rule 2 is "never change employer names" — two
+   * different sentences with the same address, and nothing had ever said
+   * which list a bare number meant.
+   */
   const context = buildUserContext({
     displayName: 'Sam',
     locale: 'en-CA',
     rules: [{ text: 'Never use the word "spearheaded".' }, { text: 'Call it Ontario Tech, never UOIT.' }],
   });
-  assert.match(context, /1\. Never use the word "spearheaded"\./);
-  assert.match(context, /2\. Call it Ontario Tech, never UOIT\./);
+  assert.match(context, /YOUR RULE 1: Never use the word "spearheaded"\./);
+  assert.match(context, /YOUR RULE 2: Call it Ontario Tech, never UOIT\./);
   // The ranking has to be stated, or a personal rule can be read as licence to
   // break rule 1 and invent something.
   assert.match(context, /below the Universal Rules/i);
+  // And a bare number is never how it should refer to one.
+  assert.match(context, /never a bare/i);
+});
+
+test('what the person reads quotes the rule, not its number', () => {
+  // "rule 2" means nothing to somebody reading their own resume: they wrote
+  // the sentence and did not number it.
+  const context = buildUserContext({ rules: [{ text: 'Keep bullets to one line.' }] });
+  assert.match(context, /quote what\s+the rule says rather than its number/);
 });
 
 test('blank rules do not become empty numbered lines', () => {
   const context = buildUserContext({ rules: [{ text: '   ' }, { text: 'Keep bullets to one line.' }] });
-  assert.match(context, /1\. Keep bullets to one line\./);
-  assert.doesNotMatch(context, /2\./);
+  assert.match(context, /YOUR RULE 1: Keep bullets to one line\./);
+  assert.doesNotMatch(context, /YOUR RULE 2/);
 });
 
 test('no rules means no rules section at all', () => {
