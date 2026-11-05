@@ -32,6 +32,16 @@ const RATES: Record<string, ModelRates> = {
   // has to account for it. See maxTokens in lib/anthropic.ts.
   'claude-sonnet-5': { input: 2, output: 10 },
   'claude-sonnet-4-6': { input: 3, output: 15 },
+  /*
+   * The claim check, and the only other model the app calls.
+   *
+   * These are the rates up to 100K tokens; past that it is $0.50 and $2.50.
+   * Nothing here approaches it — the check sends one resume's rewritten
+   * bullets with their sources, a few thousand tokens — so the cheaper pair is
+   * the honest one to cost with, and over-reporting a tenth of a cent would be
+   * its own kind of wrong.
+   */
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
 };
 
 /**

@@ -10,12 +10,19 @@ import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
 import { annotate, cutTargets, resolveTailored, unreadable } from '../../../../lib/provenance';
 import { applyFlags, checkBullets } from '../../../../lib/honesty';
+import {
+  CLAIM_CHECK_PROMPT,
+  CLAIM_CHECK_TOOL,
+  claimCheckInput,
+  flagsFromVerdicts,
+  type ClaimVerdict,
+} from '../../../../lib/claimCheck';
 import { asLines } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
 import type { Pin } from '../../../../lib/pins';
-import { COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
+import { CLAIM_CHECK_ESTIMATE_MS, COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
 import { pageTarget, type RuleCheck } from '../../../../lib/rules';
 import {
   getActiveRules,
@@ -246,9 +253,50 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // tool names, and nothing on it says "flag anomalies".
       postingWords,
     );
-    const honest = applyFlags(resolved.structure, flags);
-    if (flags.length) {
-      console.error(`[Resumi9] Tailoring made ${flags.length} claim(s) the profile does not support; put back.`);
+    /*
+     * And the same question asked of the model, for what arithmetic cannot see.
+     *
+     * The lexical check above reads the posting's words appearing where the
+     * source has nothing — six of the eleven inventions from one apply run.
+     * The five it misses are claims built out of words the source already
+     * contains, and nothing lexical reaches those. See claimCheck.ts for why
+     * both halves of the answer are verified rather than trusted.
+     *
+     * Skipped without comment when there is no budget left: the resume is
+     * finished and correct as far as the arithmetic can tell, and a person
+     * waiting on a job application does not lose it to a second opinion. A
+     * failure here is logged and dropped for the same reason.
+     */
+    let checked = flags;
+    if (affords(deadline, CLAIM_CHECK_ESTIMATE_MS)) {
+      const asking = claimCheckInput(resolved.bullets);
+      if (asking.length) {
+        try {
+          const { toolInput: verdicts } = await callClaude<{ verdicts: ClaimVerdict[] }>({
+            userId,
+            kind: 'claim_check',
+            system: CLAIM_CHECK_PROMPT,
+            content: [{ type: 'text' as const, text: JSON.stringify(asking) }],
+            tool: CLAIM_CHECK_TOOL,
+            deadline,
+          });
+          const read = flagsFromVerdicts(verdicts?.verdicts ?? [], resolved.bullets);
+          // Never twice for one bullet: the lexical reason is the more specific
+          // of the two and it got there first.
+          const already = new Set(flags.map((f) => f.text));
+          checked = [...flags, ...read.flags.filter((f) => !already.has(f.text))];
+          if (read.discarded) {
+            console.error(`[Resumi9] The claim check returned ${read.discarded} verdict(s) that did not check out.`);
+          }
+        } catch (err) {
+          console.error('[Resumi9] The claim check did not answer; the resume stands as checked:', err);
+        }
+      }
+    }
+
+    const honest = applyFlags(resolved.structure, checked);
+    if (checked.length) {
+      console.error(`[Resumi9] Tailoring made ${checked.length} claim(s) the profile does not support; put back.`);
     }
 
     const guarded = validateTailored(structure, honest.structure);

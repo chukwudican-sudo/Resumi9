@@ -34,6 +34,17 @@ export const SAVE_RESERVE_MS = 3_000;
 export const COMPILE_ESTIMATE_MS = 3_000;
 
 /**
+ * What the claim check costs, budgeted the same way.
+ *
+ * One Haiku call over a dozen bullets and their sources: a few thousand
+ * tokens in, a few hundred out. Budgeted at eight seconds, which is generous
+ * for that and deliberately so — it is asked for LAST, after a resume that is
+ * already finished and already honest as far as the arithmetic can tell, so
+ * the question is whether there is comfortable room rather than just room.
+ */
+export const CLAIM_CHECK_ESTIMATE_MS = 8_000;
+
+/**
  * Whether `costMs` of work fits before the deadline, with the save still safe.
  *
  * `now` is a parameter so the loop that calls this can be tested with a clock

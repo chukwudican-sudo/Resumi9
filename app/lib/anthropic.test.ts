@@ -119,6 +119,7 @@ test('every model the app calls has its own pricing entry', () => {
     // USD for one million input tokens, from claude.com/pricing.
     'claude-sonnet-5': 2,
     'claude-sonnet-4-6': 3,
+    'claude-haiku-5-5': 0.1,
   };
   for (const kind of Object.keys(CALL_CONFIG) as UsageKind[]) {
     const model = CALL_CONFIG[kind].model;

@@ -33,6 +33,7 @@ export type UsageKind =
   | 'compose'
   | 'polish'
   | 'proofread'
+  | 'claim_check'
   | 'rule';
 
 /**
@@ -49,6 +50,18 @@ export type UsageKind =
  * arithmetic lives.
  */
 const MODEL = 'claude-sonnet-5';
+
+/**
+ * The model for reading one resume back against its own sources.
+ *
+ * Haiku 5.5, and the only call in the app not on MODEL. The claim check asks
+ * one narrow question of each rewritten bullet — does this say anything its
+ * source does not — and both halves of its answer are verified in code before
+ * anything acts on them, so the judgement does not need the model that wrote
+ * the resume. At $0.10 and $0.50 per million it is about a tenth of a cent on
+ * a tailor that costs four cents.
+ */
+const CHECKER = 'claude-haiku-5-5';
 
 /**
  * What one whole REQUEST gets, shared across every call it makes.
@@ -179,6 +192,16 @@ export const CALL_CONFIG: Record<
   // Reads the whole resume and returns a short list, so the budget is for
   // input rather than output.
   proofread: { model: MODEL, maxTokens: 2100, effort: 'low', timeoutMs: 25000, retries: 1 },
+  /*
+   * One judgement per rewritten bullet, inside the tailor's own budget.
+   *
+   * On the cheap model and at low effort because the question is narrow and
+   * the answer is checked: a verdict naming a span that is not in the bullet,
+   * or a quote that is not in the profile, is discarded rather than acted on.
+   * No retry — it runs after the resume is finished, and a resume is never
+   * delayed twice for a check that can be skipped.
+   */
+  claim_check: { model: CHECKER, maxTokens: 2800, effort: 'low', timeoutMs: 30000, retries: 0 },
 };
 
 /**
