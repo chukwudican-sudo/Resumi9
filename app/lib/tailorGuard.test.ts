@@ -57,12 +57,43 @@ test('rewriting every bullet is not a deletion', () => {
   assert.deepEqual(structure.experience.map((e) => e.bullets), tailored.experience.map((e) => e.bullets));
 });
 
-test('reordering the sections is not a deletion', () => {
+test('reordering the entries is not a deletion, and does not survive either', () => {
+  /*
+   * Two separate claims, and the second one changed.
+   *
+   * A reorder is not a deletion and never raises a repair — that is what this
+   * test was written for. It also asserted that the new order survived, which
+   * was incidental and turned out to be wrong: measured over eleven resumes
+   * from one run, three printed a project still marked "Present" below one
+   * that finished in August, and several put MealApp above Resumi where the
+   * profile has Resumi first. Dates running downwards is a convention a
+   * reader checks, and the profile's order already follows it — inPrintOrder
+   * sorts on real date parts, where the model sees a display string.
+   */
   const tailored = clone();
   tailored.experience = [tailored.experience[2], tailored.experience[0], tailored.experience[1]];
   const { repairs, structure } = validateTailored(SOURCE, tailored);
-  assert.deepEqual(repairs, []);
-  assert.deepEqual(orgs(structure), ['WesternBell', 'Droady', 'Aegon'], 'the reordering must survive');
+  assert.deepEqual(repairs, [], 'nothing was deleted, so nothing is repaired');
+  assert.deepEqual(orgs(structure), ['Droady', 'Aegon', 'WesternBell'], 'printed in the profile’s order');
+});
+
+test('a project the tailor moved up goes back where it belongs', () => {
+  const tailored = clone();
+  tailored.projects = [tailored.projects[1], tailored.projects[0]];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.deepEqual(structure.projects.map((p) => p.name), ['MealApp', 'FraudWatch']);
+});
+
+test('a stray keeps its place rather than being swept to the end', () => {
+  // It earns its own warning; moving it as well makes that harder to read.
+  const tailored = clone();
+  tailored.projects = [
+    tailored.projects[0],
+    { name: 'Not in the profile', tech: 'Go', dates: '2026', bullets: ['x'] },
+    tailored.projects[1],
+  ];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.deepEqual(structure.projects.map((p) => p.name), ['MealApp', 'Not in the profile', 'FraudWatch']);
 });
 
 test('a rewritten job title is not a deletion', () => {
@@ -445,8 +476,17 @@ test('terms combined into one item still count as present', () => {
     ...source,
     skills: [{ category: 'Tools', items: 'Git/GitHub, Data Pipelines/ETL' }],
   });
-  assert.deepEqual(tailored.repairs.filter((r) => r.kind === 'skill'), []);
+  assert.match(tailored.structure.skills[0].items, /Git\/GitHub/, 'the merge of two sourced terms stands');
   assert.equal(tailored.structure.skills.length, 1);
+  /*
+   * "Data Pipelines/ETL" is the other half of the same case and goes the
+   * other way: Data Pipelines is theirs and ETL is in neither their skills
+   * nor their bullets, so the item keeps the half they claimed. Nothing
+   * checked additions when this test was written.
+   */
+  assert.match(tailored.structure.skills[0].items, /Data Pipelines(?!\/ETL)/);
+  assert.equal(/ETL/.test(tailored.structure.skills[0].items), false);
+  assert.ok(tailored.repairs.some((r) => /ETL/.test(r.message)));
 });
 
 test('a skill that really is gone comes back to its own group, not the last one', () => {
@@ -681,4 +721,70 @@ test('a line left with nothing after deduping is not printed empty', () => {
   ];
   const { structure } = validateTailored(SOURCE, tailored);
   assert.equal(structure.skills.length, 1, 'the duplicate line is gone, not blank');
+});
+
+// ── a skill they have never claimed ────────────────────────────────────────
+//
+// The skills repair was one-directional for its whole life: it put back what
+// the tailoring dropped and said nothing about what the tailoring ADDED. A
+// model returning a "Cloud & DevOps" line holding Kubernetes, Terraform and
+// AWS SageMaker — none of them anywhere in the profile — came through with
+// zero repairs.
+
+test('a skill the profile does not mention is taken off', () => {
+  const tailored = clone();
+  tailored.skills = [
+    { category: 'Languages', items: 'TypeScript, Java, SQL' },
+    { category: 'Cloud & DevOps', items: 'Kubernetes, Terraform' },
+  ];
+  const { structure, repairs } = validateTailored(SOURCE, tailored);
+  assert.equal(/Kubernetes|Terraform/.test(JSON.stringify(structure.skills)), false);
+  assert.ok(repairs.some((r) => /does not mention/.test(r.message)));
+});
+
+test('a skill named in their own bullets is theirs to list', () => {
+  // The vocabulary is the whole record, not the skills line: something they
+  // did and wrote down is something they can claim as a skill.
+  const source = clone();
+  source.experience[0].bullets = ['Integrated an AI model', 'Deployed the service with Terraform'];
+  const tailored = JSON.parse(JSON.stringify(source)) as ResumeStructure;
+  tailored.skills = [{ category: 'Infrastructure', items: 'Terraform' }];
+  const { structure, repairs } = validateTailored(source, tailored);
+  assert.match(JSON.stringify(structure.skills), /Terraform/);
+  assert.equal(repairs.some((r) => /does not mention/.test(r.message)), false);
+});
+
+test('a compound of two sourced terms is not an invention', () => {
+  // "Git/GitHub" merges two terms the profile has. Refusing it would make
+  // regrouping — which the tailor is allowed to do — impossible.
+  const source = clone();
+  source.skills = [{ category: 'Tools', items: 'Git, GitHub, Microsoft Excel' }];
+  const tailored = JSON.parse(JSON.stringify(source)) as ResumeStructure;
+  tailored.skills = [{ category: 'Tools', items: 'Git/GitHub, Microsoft Excel' }];
+  const { structure } = validateTailored(source, tailored);
+  assert.match(structure.skills[0].items, /Git\/GitHub/);
+});
+
+test('a category the profile does not have is still the tailor’s to choose', () => {
+  // A heading is not a claim. Only the items are checked.
+  const tailored = clone();
+  tailored.skills = [{ category: 'Languages & Data', items: 'TypeScript, Java, SQL' }];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.equal(structure.skills[0].category, 'Languages & Data');
+});
+
+test('facts the person answered count as their record', () => {
+  const tailored = clone();
+  tailored.skills = [
+    { category: 'Languages', items: 'TypeScript, Java, SQL' },
+    { category: 'Design', items: 'Figma' },
+    { category: 'Tools', items: 'Microsoft Excel, Ms PowerPoint' },
+  ];
+  const withFacts = validateTailored(SOURCE, tailored, {
+    alsoSaid: 'Did user research and wireframing/prototyping in Figma for MealApp',
+  });
+  assert.match(JSON.stringify(withFacts.structure.skills), /Figma/);
+
+  const without = validateTailored(SOURCE, JSON.parse(JSON.stringify(tailored)));
+  assert.equal(/Figma/.test(JSON.stringify(without.structure.skills)), false, 'nothing in the record says Figma');
 });

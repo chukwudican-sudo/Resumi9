@@ -289,7 +289,32 @@ export function restoreMissing<T>(
     out.splice(at < 0 ? out.length : at, 0, { item: source[s], from: s });
   }
 
-  return { entries: out.map((slot) => slot.item), missing, removed };
+  /*
+   * Back into the order they are printed in, which is not the tailor's to
+   * decide.
+   *
+   * Measured across eleven resumes from one run: three of them printed a
+   * project still marked "Present" BELOW one that finished in August, and
+   * several put MealApp above Resumi where the profile has Resumi first. The
+   * model reorders by relevance — a reasonable instinct, and wrong, because a
+   * reader checks a resume's dates run downwards and reads a break in them as
+   * carelessness. The profile's order is already the right one: it came from
+   * inPrintOrder, which sorts on real date parts rather than on the display
+   * string a model sees.
+   *
+   * A stray — something that came back matching nothing in the source — keeps
+   * its place after whatever preceded it rather than being swept to the end.
+   * It earns its own warning elsewhere, and moving it as well would make that
+   * warning harder to understand, not easier.
+   */
+  let last = -1;
+  const ordered = out.map((slot) => {
+    if (slot.from >= 0) last = slot.from;
+    return { ...slot, at: slot.from >= 0 ? slot.from : last + 0.5 };
+  });
+  ordered.sort((a, b) => a.at - b.at);
+
+  return { entries: ordered.map((slot) => slot.item), missing, removed };
 }
 
 // ── reconciling a matched pair ─────────────────────────────────────────────
@@ -389,6 +414,15 @@ export function validateTailored(
      * then behaves exactly as it did before instructions were read at all.
      */
     asked?: Asked;
+    /**
+     * Everything else the person's own record says, for the skills check.
+     *
+     * Their answered facts, which are part of their record and not part of
+     * the structure — Figma was in the facts and in no skills line, and a
+     * tailor that lists it for a design posting is reporting rather than
+     * inventing. Absent means the structure alone is the vocabulary.
+     */
+    alsoSaid?: string;
   } = {},
 ): TailorGuardResult {
   const repairs: Repair[] = [];
@@ -628,6 +662,66 @@ export function validateTailored(
   const stillThere = (term: string) =>
     waysOfWriting(term).some((way) => patternFor(way).test(written));
 
+  /*
+   * A skill they have never claimed, taken off.
+   *
+   * The repair below this is one-directional and always has been: it puts
+   * back what the tailoring dropped and says nothing about what the tailoring
+   * ADDED. Reproduced on demand — a model returning a "Cloud & DevOps" line
+   * holding Kubernetes, Terraform and AWS SageMaker, none of them anywhere in
+   * the profile, came through this function with zero repairs.
+   *
+   * The vocabulary is the person's whole record: their skills, every word of
+   * their own entries, and the facts they have answered. Categories are NOT
+   * checked — grouping and naming a group is the tailor's to decide, and a
+   * category is a heading rather than a claim.
+   *
+   * An item is kept if the record says it, OR if it is a compound whose every
+   * part the record says: "Git/GitHub" merges two sourced terms and is not an
+   * invention, and refusing it would make regrouping impossible.
+   */
+  const vocabulary = [
+    ...srcSkills.map((g) => `${asText(g.category)} ${asText(g.items)}`),
+    ...asList<any>(source.experience).map((e) => [e?.title, e?.org, ...(e?.bullets ?? [])].join(' ')),
+    ...asList<any>(source.projects).map((p) => [p?.name, p?.tech, ...(p?.bullets ?? [])].join(' ')),
+    ...asList<any>(source.education).map((e) => [e?.degree, e?.school, ...(e?.bullets ?? [])].join(' ')),
+    asText(source.summary),
+    options.alsoSaid ?? '',
+  ].join(' \n ');
+
+  const theirs = (term: string) => waysOfWriting(term).some((way) => patternFor(way).test(vocabulary));
+  const partsOf = (item: string) =>
+    item.split(/[\/&+()]|,| and /i).map((t) => t.trim()).filter(Boolean);
+
+  /*
+   * What survives of one item, which is not always all or nothing.
+   *
+   * "Data Pipelines/ETL" came back for a profile holding "Data Pipelines" and
+   * no ETL anywhere. Dropping the item takes a real skill off with the
+   * invented one; keeping it prints a claim they never made. So the item is
+   * rewritten to the half that is theirs, and only the other half is
+   * reported.
+   */
+  const asClaimed = (item: string): { keep: string; dropped: string[] } => {
+    if (theirs(item)) return { keep: item, dropped: [] };
+    const parts = partsOf(item);
+    if (parts.length < 2) return { keep: '', dropped: [item] };
+    const mine = parts.filter((part) => theirs(part));
+    if (mine.length === parts.length) return { keep: item, dropped: [] };
+    return { keep: mine.join('/'), dropped: parts.filter((part) => !theirs(part)) };
+  };
+
+  const invented: string[] = [];
+  for (const group of outSkills) {
+    const kept: string[] = [];
+    for (const item of splitTerms(group.items)) {
+      const { keep, dropped } = asClaimed(item);
+      if (keep) kept.push(keep);
+      invented.push(...dropped);
+    }
+    group.items = kept.join(', ');
+  }
+
   const skills = outSkills.length ? outSkills.map((g) => ({ ...g })) : srcSkills.map((g) => ({ ...g }));
   const lostTerms: string[] = [];
   const droppedTerms: string[] = [];
@@ -704,6 +798,14 @@ export function validateTailored(
 
   if (droppedTerms.length) {
     repairs.push(asAsked(`Skills: removed ${droppedTerms.join(', ')}, as you asked.`));
+  }
+
+  if (invented.length) {
+    repairs.push({
+      kind: 'skill',
+      message: `${invented.length === 1 ? 'A skill was' : `${invented.length} skills were`} listed that ${from} does not mention, so ${invented.length === 1 ? 'it was' : 'they were'} taken off: ${invented.join(', ')}.`,
+      logLine: `Skills: removed ${invented.join(', ')} — not in ${from}.`,
+    });
   }
 
   if (lostTerms.length) {

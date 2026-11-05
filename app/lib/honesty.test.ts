@@ -688,3 +688,87 @@ test('a lifted phrase is quoted with its own punctuation', () => {
   );
   assert.match(flags[0].reason, /"input\/output"/);
 });
+
+// ── three real flags from the Rockwell UX run ──────────────────────────────
+//
+// The first acceptance run flagged three bullets on that resume. Two were
+// right and one was wrong, and the wrong one is why the two fixes below this
+// comment exist: the person's own fact says "Did user research" and the
+// rewrite said "Conducted user research", which is the one thing the rules
+// name as allowed — swapping a synonym for a fact they do have.
+
+const ROBOTICS_POSTING =
+  'You will conduct user research, build wireframes and prototypes, and shape the interaction flow ' +
+  'between people and robots. Figma experience and multi-discipline team experience required.';
+
+test('a verb swapped for a sourced fact is not an invention', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Conducted user research and wireframing/prototyping in Figma for the client-facing website design',
+        evidence: ['Did user research and wireframing/prototyping in Figma for client websites'],
+      }),
+    ],
+    [], undefined, undefined, ROBOTICS_POSTING,
+  );
+  assert.deepEqual(flags, [], 'conducted is did');
+});
+
+test('the purpose clause in the same sentence still is', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Conducted user research and built wireframes/prototypes in Figma to shape the app’s interaction flow before development',
+        evidence: ['Did user research and wireframing/prototyping in Figma for MealApp'],
+      }),
+    ],
+    [], undefined, undefined, ROBOTICS_POSTING,
+  );
+  assert.equal(flags.length, 1, 'nothing in the source says what the research was for');
+  assert.match(flags[0].reason, /shape the app’s interaction/);
+});
+
+test('a purpose lifted onto a design fact is caught', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Designed screens and onboarding flow in Figma to shape the interaction flow between users and the app’s AI features',
+        evidence: ['Designed screens and onboarding flow in Figma at Droady in San Francisco'],
+      }),
+    ],
+    [], undefined, undefined, ROBOTICS_POSTING,
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /shape the interaction/);
+});
+
+test('wireframing and wireframes are one word', () => {
+  // The stemmer took "wireframes" to wireframe and "wireframing" to
+  // wirefram, so a bullet rewritten from the person's own word was flagged
+  // for taking the posting's.
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Built wireframes and prototypes in Figma',
+        evidence: ['Did wireframing and prototyping in Figma'],
+      }),
+    ],
+    [], undefined, undefined, 'Build wireframes and prototypes in Figma.',
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('a position claimed is still an invention, however ordinary the verb', () => {
+  // The do-synonyms are set aside; managed, owned, led and oversaw are not,
+  // and must not be — "worked on" rewritten as "managed" is an escalation.
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Managed the release process across three teams',
+        evidence: ['Worked on the release process'],
+      }),
+    ],
+    [], undefined, undefined, 'You will manage the release process across teams.',
+  );
+  assert.equal(flags.length, 1, `managed is not did; got ${JSON.stringify(flags)}`);
+});

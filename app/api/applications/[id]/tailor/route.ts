@@ -299,7 +299,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
       console.error(`[Resumi9] Tailoring made ${checked.length} claim(s) the profile does not support; put back.`);
     }
 
-    const guarded = validateTailored(structure, honest.structure);
+    const guarded = validateTailored(structure, honest.structure, {
+      // Their answered facts are part of their record, so a skill one of them
+      // names is theirs to list. Figma was in the facts and in no skills line.
+      alsoSaid: supporting.map((fact) => fact.text).join(' \n '),
+    });
     const surfaced = surfaceRepairs(guarded.repairs);
 
     /*

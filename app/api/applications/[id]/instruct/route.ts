@@ -463,6 +463,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const guarded = validateTailored(structure, honest.structure, {
       sourceLabel: 'the previous version',
       asked,
+      alsoSaid: supporting.map((fact) => fact.text).join(' \n '),
     });
     const surfaced = surfaceRepairs(guarded.repairs);
 

@@ -158,6 +158,21 @@ const COMMON = new Set([
   // grew and grow are not each other to any stemmer this file is going to
   // have; "supported" is what everybody writes for everything.
   ...['grew','grow','growing','grown','support','supports','supported','supporting'],
+  /*
+   * Ways of saying "did it", which are a wording choice and not a claim.
+   *
+   * Found on a real run: a fact reading "Did user research and wireframing in
+   * Figma" came back as "Conducted user research and built wireframes", and
+   * the pair "conducted research" was flagged — the posting says "conduct
+   * user research" and the source says "did". Same claim, different verb,
+   * which is the one rewrite the rules name as allowed.
+   *
+   * Only pure do-synonyms. managed, owned, oversaw, led, coordinated and
+   * drove are NOT here and must not be: those claim a position, and a source
+   * saying "worked on" rewritten as "managed" is an escalation this check is
+   * one of the few things that can catch.
+   */
+  ...['do','did','does','doing','done','conduct','conducts','conducted','conducting','perform','performs','performed','performing','carry','carried','carrying','complete','completes','completed','completing','execute','executed','executing','undertake','undertook','undertaken','handle','handles','handled','handling'],
   ...['project','projects','feature','features','app','application','system','systems','team','teams','code','data','user','users','time','work'],
 ]);
 
@@ -177,8 +192,13 @@ const stem = (word: string): string =>
     // leaves "strategie" against "strategy" — which read as an invention on a
     // bullet rewritten from the person's own sentence about strategy.
     .replace(/(?<=.{3})ies$/, 'y')
-    .replace(/(?<=.{4})e$/, '')
-    .replace(/(?<=.{3})s$/, '');
+    // The plural BEFORE the trailing e, or the two spellings of one word come
+    // apart: "wireframes" loses its s to become "wireframe" and stops there,
+    // while "wireframing" loses its ing and becomes "wirefram". Read as two
+    // words, a bullet rewritten from the person's own "wireframing" was
+    // flagged for taking "wireframes" from the posting.
+    .replace(/(?<=.{3})s$/, '')
+    .replace(/(?<=.{4})e$/, '');
 
 /** The words in a sentence that actually say what it is about, stemmed. */
 const contentWords = (text: string): string[] => {
