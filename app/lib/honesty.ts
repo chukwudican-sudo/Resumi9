@@ -540,6 +540,18 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
    * the person is owed an explanation for.
    */
   const emptied: string[] = [];
+  /*
+   * Left with one line, which is thinner than the person's own rule allows.
+   *
+   * Said rather than acted on, and that is a deliberate difference from the
+   * emptied case above. An entry with nothing under it is a printing mistake
+   * and can only be taken off; an entry with one real line is a real entry,
+   * and deleting somebody's job because the OTHER bullet was an invention
+   * would make this check cost more than what it caught. So the resume keeps
+   * it and the person is told, which is also what they can act on — the line
+   * that went is named two warnings up.
+   */
+  const thinned: string[] = [];
 
   for (const kind of ['experience', 'projects', 'education'] as const) {
     if (!Array.isArray(fixed[kind])) continue;
@@ -553,9 +565,11 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
             return flag.revertTo;
           })
           .filter((text: string) => text.trim());
-        if (before > 0 && bullets.length === 0) {
-          emptied.push(entry.org || entry.name || entry.school || entry.title || 'an entry');
-        }
+        const named = entry.org || entry.name || entry.school || entry.title || 'an entry';
+        if (before > 0 && bullets.length === 0) emptied.push(named);
+        // Education is left out: a degree is one line about a school and is
+        // not thin for having one.
+        if (bullets.length === 1 && before > 1 && kind !== 'education') thinned.push(named);
         return { ...entry, bullets };
       })
       .filter((entry: any) => (entry.bullets ?? []).length > 0);
@@ -575,8 +589,16 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
   return {
     structure: fixed,
     log,
-    // One line per flag, so the person can see exactly what was claimed rather
-    // than a count. This is the only place the specific claim is ever named.
-    warnings: flags.map((f) => `A rewritten bullet ${f.reason}, so ${f.revertTo ? 'your own wording was put back' : 'it was removed'}: "${f.text}"`),
+    warnings: [
+      // One line per flag, so the person can see exactly what was claimed
+      // rather than a count. This is the only place the claim is ever named.
+      ...flags.map((f) => `A rewritten bullet ${f.reason}, so ${f.revertTo ? 'your own wording was put back' : 'it was removed'}: "${f.text}"`),
+      ...(thinned.length
+        ? [
+            `${thinned.join(', ')} ${thinned.length === 1 ? 'has' : 'have'} only one line left, and your rules ask for two. ` +
+              `Add a fact in the change box or tailor again, and ${thinned.length === 1 ? 'it' : 'they'} will fill back out.`,
+          ]
+        : []),
+    ],
   };
 }

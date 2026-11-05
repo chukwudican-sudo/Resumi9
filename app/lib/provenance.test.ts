@@ -18,7 +18,7 @@ const SOURCE: ResumeStructure = {
   skills: [{ category: 'Languages', items: 'Java, TypeScript' }],
 };
 
-const indexOf = (facts: { text: string; entryId?: string | null }[] = []) => annotate(SOURCE, facts).index;
+const indexOf = (facts: { text: string; entryId?: string | null; entryName?: string | null }[] = []) => annotate(SOURCE, facts).index;
 
 test('every bullet is offered to the model with an id', () => {
   const { profile, index } = annotate(SOURCE);
@@ -286,4 +286,73 @@ test('the id is not left on the entry handed to the guard', () => {
   const entry = (structure.experience as any[])[0];
   assert.equal('id' in entry, false);
   assert.equal(entry.org, 'Droady');
+});
+
+// ── a fact answered about one entry ────────────────────────────────────────
+//
+// Three of one real profile's twenty facts carry an entry_id, and every bullet
+// written from one of them was deleted. The ids could not match: a fact's
+// entry_id is a profile_entries row id and the ids here are positions.
+
+test('a fact about an entry on the page is that entry’s own evidence', () => {
+  const index = indexOf([
+    { text: 'Did user research and wireframing in Figma for FraudWatch', entryId: 'entry_a683', entryName: 'FraudWatch' },
+  ]);
+  const { bullets } = resolveTailored(
+    {
+      ...SOURCE,
+      projects: [{ ...SOURCE.projects[0], id: 'p0', bullets: [{ from: ['f0'], text: 'Did user research and wireframing in Figma' }] }],
+      experience: [{ ...SOURCE.experience[0], id: 'e0', bullets: [{ from: ['e0.b0'] }] }],
+    },
+    index,
+  );
+  const written = bullets.find((b) => /Figma/.test(b.text))!;
+  assert.equal(written.moved, false, 'it belongs to this entry');
+  assert.equal(written.unsourced, false);
+  assert.deepEqual(written.evidence, ['Did user research and wireframing in Figma for FraudWatch']);
+});
+
+test('the same fact used under a different entry still reads as moved', () => {
+  // The scoping is the point of carrying the entry at all: a fact about the
+  // project is not evidence for the job.
+  const index = indexOf([
+    { text: 'Did user research and wireframing in Figma for FraudWatch', entryId: 'entry_a683', entryName: 'FraudWatch' },
+  ]);
+  const { bullets } = resolveTailored(
+    {
+      ...SOURCE,
+      experience: [{ ...SOURCE.experience[0], id: 'e0', bullets: [{ from: ['f0'], text: 'Did user research and wireframing in Figma' }] }],
+      projects: [{ ...SOURCE.projects[0], id: 'p0', bullets: [{ from: ['p0.b0'] }] }],
+    },
+    index,
+  );
+  assert.equal(bullets.find((b) => /Figma/.test(b.text))!.moved, true);
+});
+
+test('a fact about an entry that is not on the page stays unmatchable', () => {
+  const index = indexOf([
+    { text: 'Led 20+ advisors at Aegon', entryId: 'entry_9bea', entryName: 'Aegon' },
+  ]);
+  const { bullets } = resolveTailored(
+    {
+      ...SOURCE,
+      experience: [{ ...SOURCE.experience[0], id: 'e0', bullets: [{ from: ['f0'], text: 'Led 20+ advisors' }] }],
+      projects: [{ ...SOURCE.projects[0], id: 'p0', bullets: [{ from: ['p0.b0'] }] }],
+    },
+    index,
+  );
+  assert.equal(bullets.find((b) => /advisors/.test(b.text))!.moved, true, 'Aegon is not on this resume');
+});
+
+test('a fact about nobody in particular is still evidence anywhere', () => {
+  const index = indexOf([{ text: 'Took part in a Brilliant Catalyst competition' }]);
+  const { bullets } = resolveTailored(
+    {
+      ...SOURCE,
+      experience: [{ ...SOURCE.experience[0], id: 'e0', bullets: [{ from: ['f0'], text: 'Took part in a Brilliant Catalyst competition' }] }],
+      projects: [{ ...SOURCE.projects[0], id: 'p0', bullets: [{ from: ['p0.b0'] }] }],
+    },
+    index,
+  );
+  assert.equal(bullets.find((b) => /Catalyst/.test(b.text))!.moved, false);
 });

@@ -19,6 +19,7 @@ import {
   getActiveRules,
   getApplication,
   getLatestResume,
+  getSupportingFacts,
   getUser,
   saveResume,
 } from '../../../../server/db/repository';
@@ -116,12 +117,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const question = typeof body.question === 'string' ? body.question.trim().slice(0, 500) : '';
   const answer = typeof body.answer === 'string' ? body.answer.trim().slice(0, 500) : '';
 
-  const [record, current, rules, user, spent] = await Promise.all([
+  const [record, current, rules, user, spent, supporting] = await Promise.all([
     getApplication(userId, params.id),
     getLatestResume(userId, params.id),
     getActiveRules(userId),
     getUser(userId),
     countInstructedSince(userId, params.id),
+    /*
+     * What they have already told us, which an edit could not see.
+     *
+     * The tailor has had these for months; the edit was handed the finished
+     * page and nothing else. So an edit had two options for anything not
+     * already printed — invent it, which the guard reverts, or ask for it —
+     * and it asked. The person had answered the same question in /interview
+     * weeks earlier.
+     */
+    getSupportingFacts(userId),
   ]);
 
   if (!record) return errorResponse({ type: 'generic', message: 'Application not found.' }, 404);
@@ -172,7 +183,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * becomes evidence for the next edit; what it buys is that every ordinary
    * edit is not flagged for departing from a profile it was never editing.
    */
-  const { profile: annotated, index } = annotate(structure);
+  // With the facts, so a bullet written from one resolves to real evidence
+  // rather than to nothing. Handed the page alone, the honesty check read
+  // every such bullet as invented and deleted it.
+  const { profile: annotated, index } = annotate(structure, supporting);
 
   /*
    * What the person's own words give permission for.
@@ -306,6 +320,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const said = [
     `The person has asked for one change: "${instruction}"`,
+    /*
+     * Their own answers, offered before the model can ask for them again.
+     *
+     * Worded for an EDIT rather than a tailor: the tailor is invited to work
+     * relevant facts in, where an edit may only use one if the instruction
+     * asks for something it covers. "Do not ask for what is already here" is
+     * said outright, because being asked for a fact you have already given is
+     * the thing that broke the first revision anybody tried.
+     */
+    supporting.length
+      ? `Also true of this person, in their own words, from questions they have answered — the \`facts\` list in the JSON above. They are NOT on this resume. If the instruction asks for something one of them covers, use it and name its id in that bullet's "from". Do not ask them for anything the facts or the structure already contain.`
+      : '',
     question ? `You asked them: "${question}"` : '',
     answer ? `They answered: "${answer}"` : '',
     removed.length

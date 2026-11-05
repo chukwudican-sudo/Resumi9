@@ -317,8 +317,26 @@ export async function getActiveFacts(userId: string) {
  */
 export async function getSupportingFacts(userId: string) {
   return db
-    .select({ category: facts.category, text: facts.text, entryId: facts.entryId })
+    .select({
+      category: facts.category,
+      text: facts.text,
+      entryId: facts.entryId,
+      /*
+       * What that entry is CALLED, which is the only part a resume structure
+       * can be matched on.
+       *
+       * The id alone was useless to everything downstream: a fact answered
+       * about one job carries a profile_entries row id, and the structure's
+       * entries are numbered e0, p1 by position — so the two could never be
+       * equal, the fact counted as belonging to no entry on the page, and a
+       * bullet written from it read as work moved in from somewhere else.
+       * Deleted, with "is not based on anything in your profile" said about
+       * the answer to a question the app itself had asked.
+       */
+      entryName: sql<string | null>`coalesce(${profileEntries.org}, ${profileEntries.title})`,
+    })
     .from(facts)
+    .leftJoin(profileEntries, eq(profileEntries.id, facts.entryId))
     .where(
       and(
         eq(facts.userId, userId),

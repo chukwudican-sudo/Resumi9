@@ -105,7 +105,7 @@ const nameOf = (kind: Kind, entry: any): string =>
  */
 export function annotate(
   structure: ResumeStructure,
-  facts: { text: string; entryId?: string | null }[] = [],
+  facts: { text: string; entryId?: string | null; entryName?: string | null }[] = [],
 ): { profile: Record<string, unknown>; index: SourceIndex } {
   const index: SourceIndex = { bullets: new Map(), facts: new Map(), entries: new Map() };
   const profile: Record<string, unknown> = {
@@ -133,11 +133,33 @@ export function annotate(
     });
   }
 
-  // Facts carry the entry they were answered about, which the tailor route used
-  // to drop. Without it a fact about one job is evidence for every job.
+  /*
+   * Facts carry the entry they were answered about, which the tailor route
+   * used to drop. Without it a fact about one job is evidence for every job.
+   *
+   * It has to be translated, though, and for a long time it was not. A fact's
+   * `entryId` is a profile_entries row id; the ids in this index are positions
+   * — e0, p1 — so the two were compared and never matched. The fact belonged
+   * to no entry on the page, a bullet written from it read as work moved in
+   * from another entry, and the honesty check deleted it saying it "is not
+   * based on anything in your profile". It was based on the answer to a
+   * question this app asked.
+   *
+   * Matched on the entry's NAME, which is the only thing the two sides share.
+   * An unmatched fact keeps its row id and stays unmatchable on purpose: that
+   * is a fact about an entry which is not on this resume, and a bullet citing
+   * one really is moving work in from somewhere else.
+   */
+  const byName = new Map<string, string>();
+  for (const [id, entry] of index.entries) {
+    const key = entry.name.trim().toLowerCase();
+    if (key && !byName.has(key)) byName.set(key, id);
+  }
+
   profile.facts = facts.map((fact, k) => {
     const id = `f${k}`;
-    const entry = fact.entryId ?? null;
+    const here = byName.get((fact.entryName ?? '').trim().toLowerCase());
+    const entry = here ?? fact.entryId ?? null;
     index.facts.set(id, { id, text: fact.text, entry });
     return { id, text: fact.text };
   });

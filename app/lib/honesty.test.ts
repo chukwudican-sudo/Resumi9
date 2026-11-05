@@ -295,10 +295,34 @@ test('a reverted bullet goes back to their words, and a sourceless one goes', ()
   assert.deepEqual(fixed.experience[0].bullets, ['What they actually wrote']);
   assert.deepEqual(fixed.projects[0].bullets, ['Left alone']);
   assert.equal(log.length, 2);
-  assert.equal(warnings.length, 2);
   // The claim itself is named, not just counted — it is the only place the
   // person can see what was nearly sent out under their name.
   assert.match(warnings[0], /stakeholders/);
+  // And Droady is down to one line, which is thinner than their own rule.
+  assert.equal(warnings.length, 3);
+  assert.match(warnings[2], /Droady has only one line left/);
+});
+
+test('an entry left with one line is kept and said out loud', () => {
+  /*
+   * Not deleted, which is the difference from an entry left with nothing. One
+   * real line is a real entry; taking somebody's job off because the OTHER
+   * bullet was an invention would cost more than the check catches.
+   */
+  const structure = {
+    experience: [{ org: 'Droady', bullets: ['Real work', 'Invented from nothing'] }],
+    projects: [{ name: 'FraudWatch', bullets: ['One line, as it always was'] }],
+  };
+  const { structure: fixed, warnings } = applyFlags(structure, [
+    { text: 'Invented from nothing', revertTo: '', reason: 'is not based on anything in your profile' },
+  ]);
+  assert.deepEqual(fixed.experience[0].bullets, ['Real work'], 'the job stays');
+  assert.equal(warnings.filter((w) => /one line left/.test(w)).length, 1);
+  assert.match(warnings.find((w) => /one line left/.test(w))!, /Droady/);
+  assert.ok(
+    !/FraudWatch/.test(warnings.find((w) => /one line left/.test(w))!),
+    'an entry that always had one line is not news',
+  );
 });
 
 test('nothing flagged means nothing said', () => {
