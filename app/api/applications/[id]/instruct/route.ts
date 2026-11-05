@@ -8,7 +8,7 @@ import { asLines, withoutOrderTalk } from '../../../../lib/changeLog';
 import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
-import { couldComeBack, readRestore, restoreLine, withRestored } from '../../../../lib/restore';
+import { couldComeBack, readRestore, restoreLine, withRestored, type Restore } from '../../../../lib/restore';
 import { fitToPages, type DroppedEntry } from '../../../../lib/fit';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
@@ -248,7 +248,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   const restore = asking && 'restore' in asking ? asking.restore : null;
 
-  if (restore && restore.only) {
+  /**
+   * The app brings an entry back itself, and makes room for it.
+   *
+   * Used by both paths that can reach it: a sentence that asks for nothing
+   * else, and a sentence the model answered with a question it did not need
+   * to ask. Copied from what the app kept rather than rebuilt, so nothing can
+   * be invented on the way and the honesty check has nothing to flag.
+   */
+  async function restoreOnly(restore: Restore, lines: string[]) {
     const back = new Set(restore.entries.map((e) => `${e.section}:${e.index}`));
     /*
      * Asking for something back is the clearest possible way of saying keep
@@ -293,7 +301,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       structure: fitted.structure,
       matchScore: current.matchScore,
       missingRequirements: (current.missingRequirements as string[]) ?? [],
-      log: [`You asked: "${instruction}"`, restoreLine(restore.entries), ...fitted.log],
+      log: [...lines, ...fitted.log],
       warnings: fitted.warnings,
       estimatedPages: current.estimatedPages,
       pageCount: fitted.pages,
@@ -308,7 +316,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       pins,
       mode: 'instructed',
     });
-    return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
+    return { resumeId, editsLeft: FREE_EDITS - spent - 1 };
+  }
+
+  if (restore && restore.only) {
+    return NextResponse.json(
+      await restoreOnly(restore, [`You asked: "${instruction}"`, restoreLine(restore.entries)]),
+    );
   }
 
   /*
@@ -368,8 +382,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * page it has been handed alone. It answered it with a question back, and
    * the person was left explaining their own resume to it.
    */
-  const removed = ((current.dropped as { name?: string; entry?: { dates?: string } }[]) ?? [])
-    .map((d) => (d?.name ? `${d.name}${d.entry?.dates ? ` (${d.entry.dates})` : ''}` : ''))
+  const removed = available
+    .map((d) => (d?.name ? `${d.name}${(d.entry as { dates?: string })?.dates ? ` (${(d.entry as { dates?: string }).dates})` : ''}` : ''))
     .filter(Boolean);
 
   const said = [
@@ -389,7 +403,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     question ? `You asked them: "${question}"` : '',
     answer ? `They answered: "${answer}"` : '',
     removed.length
-      ? `Not on this resume: ${removed.join(', ')}. The APP removed ${removed.length === 1 ? 'it' : 'these'} to reach the page limit in their rules — they did not. If they ask why something is missing, say so plainly and name ${removed.length === 1 ? 'it' : 'them'}. If they ask for any of it back, say so in your log and change nothing: the app restores it from what it kept.`
+      /*
+       * Everything that could come back, and a flat refusal to ask for its
+       * content.
+       *
+       * It asked. Handed "replace Kudi Kitchen with Rate Limit Lab" and a
+       * list naming Rate Limit Lab, it came back with a question — "I don't
+       * have any details (bullets, tech, dates) for Rate Limit Lab" — and the
+       * person typed the bullets out by hand. The app had them: it splices
+       * the entry in from what it kept, word for word, which is the only way
+       * it CAN arrive without being invented.
+       */
+      ? `Not on this resume, and available: ${removed.join(', ')}. Either the app removed it to reach the page limit in their rules, or it is in their profile and this resume does not use it — either way they did not remove it. If they ask why something is missing, say so plainly and name it. If they ask for any of it back, or to swap one in for something else, the APP splices it in from what it kept: do the REST of the instruction, say in your log that the entry is being put back, and never write the entry yourself. Do not ask them for its bullets, tech or dates — you do not need them and the app already has them.`
       : '',
   ]
     .filter(Boolean)
@@ -464,6 +489,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     const asking = typeof toolInput.question === 'string' ? toolInput.question.trim() : '';
     if (asking && !toolInput.structure) {
+      /*
+       * A question the app can already answer is not asked.
+       *
+       * It asked for Rate Limit Lab's bullets, tech and dates, about a
+       * project sitting in the person's own profile — and the question
+       * returned here threw away the restore the app had already read off the
+       * same sentence. They typed two bullets out by hand to tell the app
+       * something it knew, and the version that came back had the project
+       * twice.
+       *
+       * So where a restore was read, it is carried out: copied from what the
+       * app kept, word for word, with room made for it. Only the half of the
+       * instruction that needed a model goes unanswered, and the log says so
+       * rather than leaving them to wonder.
+       */
+      if (restore) {
+        const done = await restoreOnly(restore, [
+          `You asked: "${instruction}"`,
+          restoreLine(restore.entries),
+          'The rest of that instruction needs another go — ask again and it will be read against this version.',
+        ]);
+        return NextResponse.json(done);
+      }
       // Without the list of entries it read back off its own prompt. The app
       // stopped naming them; the model started.
       return NextResponse.json({ question: tidyQuestion(asking, structure), editsLeft: FREE_EDITS - spent });

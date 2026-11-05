@@ -283,3 +283,39 @@ test('something already on the page is not offered', () => {
 test('no profile at all is just what the app cut', () => {
   assert.deepEqual(couldComeBack(DROPPED, null, null).map((d) => d.name), DROPPED.map((d) => d.name));
 });
+
+test('a swap never falls back to a whole kind', () => {
+  /*
+   * "Replace the Kudi Kitchen EXPERIENCE entry with the Rate Limit Lab
+   * project" contains the word experience, and the kind branches read that as
+   * a request for every job the app had taken off — quietly bringing Western
+   * Bell back on a sentence that never mentioned it.
+   *
+   * A swap names what it wants. Nothing, when that is not available: already
+   * on the page, or no such entry.
+   */
+  const read = readRestore('Replace the Kudi Kitchen experience entry with the MealApp project', DROPPED);
+  assert.equal(read, null, 'MealApp is not on the dropped list, so there is nothing to bring in');
+});
+
+test('and still reads the name when it is available', () => {
+  const read = readRestore('Replace the Kudi Kitchen experience entry with the Rate Limit Lab project', DROPPED);
+  assert.ok(read && 'restore' in read);
+  assert.deepEqual(read.restore.entries.map((e) => e.name), ['Rate Limit Lab']);
+});
+
+test('an entry already on the page is not restored a second time', () => {
+  // A real version 4 printed Rate Limit Lab twice: the app restored it and
+  // the model, handed the bullets in the same breath, wrote it out as well.
+  const page = {
+    experience: [{ org: 'Aegon' }],
+    projects: [{ name: 'Resumi' }, { name: 'Rate Limit Lab', bullets: ['the tailored copy'] }],
+  };
+  const out = withRestored(page, [
+    { section: 'projects', index: 4, name: 'Rate Limit Lab', entry: { name: 'Rate Limit Lab', bullets: ['the older copy'] } },
+  ]);
+  assert.deepEqual(out.projects.map((p: { name: string }) => p.name), ['Resumi', 'Rate Limit Lab']);
+  // The copy on the page wins: it has been through the tailoring, the honesty
+  // check and the guard, where the other is a splice of an older version.
+  assert.deepEqual((out.projects[1] as { bullets: string[] }).bullets, ['the tailored copy']);
+});

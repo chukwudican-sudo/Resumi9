@@ -236,3 +236,101 @@ test('a question or a refusal asks nothing back', () => {
   assert.equal(asked('why did you cut the Aegon job?').ask, null);
   assert.equal(asked("don't cut the Aegon job").ask, null);
 });
+
+// ── the Intel application, three sentences deep ────────────────────────────
+//
+// Every sentence below is verbatim from one revision that went wrong three
+// times running. The resume had a Kudi Kitchen job and a Rate Limit Lab
+// project, and the app put Kudi Kitchen back after each instruction to remove
+// it — telling the person, each time, that their own instruction had been
+// undone.
+
+const INTEL: ResumeStructure = {
+  ...RESUME,
+  experience: [
+    { title: 'Founder & Web Developer', org: 'Kudi Kitchen', location: 'Oshawa, ON', dates: 'Mar 2025 – Present', bullets: ['sold things'] },
+    ...RESUME.experience,
+  ],
+  projects: [
+    { name: 'Rate Limit Lab', tech: 'Python, pytest', dates: 'Jul 2026 – Aug 2026', bullets: ['benchmarked two algorithms'] },
+    ...RESUME.projects,
+  ],
+};
+const onIntel = (words: string) => readInstruction(words, INTEL);
+
+test('replace A with B licenses removing A', () => {
+  /*
+   * Two faults at once: "replace" was not a removal verb, and "project" —
+   * said about the thing coming IN — narrowed the removal to projects and let
+   * the job through untouched.
+   */
+  const it = onIntel('Replace the Kudi Kitchen experience entry with the Rate Limit Lab project.');
+  assert.equal(it.removes('experience', 'Kudi Kitchen'), true);
+  assert.equal(it.removes('projects', 'Rate Limit Lab'), false, 'the incoming half is not a removal');
+});
+
+test('the other three ways to word a swap', () => {
+  for (const said of [
+    'swap the Kudi Kitchen job for the Rate Limit Lab project',
+    'use the Rate Limit Lab project instead of the Kudi Kitchen job',
+    'put the Rate Limit Lab project in place of the Kudi Kitchen job',
+  ]) {
+    assert.equal(onIntel(said).removes('experience', 'Kudi Kitchen'), true, said);
+    assert.equal(onIntel(said).removes('projects', 'Rate Limit Lab'), false, said);
+  }
+});
+
+test('"instead of removing X" is a refusal, not a licence', () => {
+  // The dangerous direction, and why the swap verbs are read against what
+  // follows: granting this deletes a job somebody just asked to keep.
+  for (const said of ['instead of removing Aegon, shorten it', 'in place of dropping Aegon, trim the bullets']) {
+    assert.equal(onIntel(said).removes('experience', 'Aegon'), false, said);
+  }
+});
+
+test('an answer supplying bullets does not void the removal beside it', () => {
+  // They answered a question with two bullets AND "Remove Kudi Kitchen" in
+  // one box, and the word "bullets" made the whole sentence read as being
+  // about a part of an entry.
+  const it = onIntel(
+    'Benchmarked a sliding window against a token bucket; found and fixed a subtle timing bug. Remove Kudi Kitchen',
+  );
+  assert.equal(it.removes('experience', 'Kudi Kitchen'), true);
+});
+
+test('two removal verbs are two removals', () => {
+  const it = onIntel('Delete the second, duplicate Rate Limit Lab entry and remove Kudi Kitchen');
+  assert.equal(it.removes('projects', 'Rate Limit Lab'), true);
+  assert.equal(it.removes('experience', 'Kudi Kitchen'), true);
+});
+
+test('one verb and a list is still every item on it', () => {
+  const it = onIntel('remove Aegon and WesternBell');
+  assert.equal(it.removes('experience', 'Aegon'), true);
+  assert.equal(it.removes('experience', 'WesternBell International Ltd.'), true);
+});
+
+test('a verb between two names ends the list', () => {
+  // The whole safety of reading a list: "and shorten Droady" is a second
+  // clause, not a second removal.
+  for (const said of [
+    'remove Aegon and shorten Droady',
+    'remove Aegon and keep Droady',
+    'remove Aegon, and do not touch Droady',
+  ]) {
+    const it = onIntel(said);
+    assert.equal(it.removes('experience', 'Aegon'), true, said);
+    assert.equal(it.removes('experience', 'Droady'), false, said);
+  }
+});
+
+test('a name that is both a job and a project asks which, by kind', () => {
+  // It asked "Which one — Rate Limit Lab or Rate Limit Lab?" on a page that
+  // printed the project twice. The answer it wanted was the kind, and it
+  // never said so.
+  const both: ResumeStructure = {
+    ...INTEL,
+    projects: [...INTEL.projects, { name: 'Kudi Kitchen', tech: 'Cloudflare', dates: '2026', bullets: ['a rebuild'] }],
+  };
+  assert.match(readInstruction('remove Kudi Kitchen', both).ask ?? '', /the Kudi Kitchen job or the Kudi Kitchen project/);
+});

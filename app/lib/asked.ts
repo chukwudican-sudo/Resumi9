@@ -65,14 +65,20 @@ export interface Asked {
 }
 
 /**
- * Removal, meaning it and nothing else.
+ * Removal, meaning it and nothing else — including a swap.
+ *
+ * "replace", "swap" and "substitute" are removals of the thing named on the
+ * OUTGOING side, which is what outgoingHalf below is for. Without them,
+ * "replace the Kudi Kitchen job with the Rate Limit Lab project" licensed
+ * nothing, the guard put Kudi Kitchen back, and the person was told their own
+ * instruction had been undone.
  *
  * "cut" is deliberately absent: "cut the Aegon bullets down to two" is a length
  * request, and a word that means both cannot license a deletion. It is picked up
  * by MAYBE below instead, which asks rather than acts.
  */
 const REMOVAL =
-  /\b(remove|removing|removed|delete|deleting|deleted|drop|dropping|dropped|get rid of|getting rid of|take\s+(?:[\w'’-]+\s+){0,4}out|leave out|leaving out|exclude|excluding|omit|omitting|scrap|scrapping)\b/i;
+  /\b(remove|removing|removed|delete|deleting|deleted|drop|dropping|dropped|get rid of|getting rid of|take\s+(?:[\w'’-]+\s+){0,4}out|leave out|leaving out|exclude|excluding|omit|omitting|scrap|scrapping|replace|replacing|replaced|swap|swapping|substitute|substituting|instead\s+of|in\s+place\s+of)\b/i;
 
 /** Wording that might be a removal. Enough to ask about, never enough to act. */
 const MAYBE = /\b(cut|cutting|lose|losing|ditch|ditching|without|no longer)\b/i;
@@ -99,12 +105,25 @@ const ASKING = /^\s*(why|what|how|did|does|do|can|could|should|is|are|was|were|w
  * bullet", "shorten the Aegon bullets" — keep working rather than becoming a
  * button that deletes somebody's employment history.
  */
+/**
+ * What may sit between two names for them to be one list.
+ *
+ * Commas, "and", "&", "plus", and the small words that hang off a name. A
+ * VERB between them means the second name belongs to a different clause:
+ * "remove Aegon and shorten Droady" is not a list of two removals, and that
+ * distinction is the only thing making this safe to read at all.
+ */
+const GLUE = /^[\s,;&]*(?:and|&|plus|also|as\s+well\s+as)?[\s,;&]*(?:the|my|that)?\s*$/i;
+
 const PART =
   /\b(bullets?|lines?|points?|sentences?|clauses?|words?|phrases?|parts?|bits?|mentions?|references?|details?|numbers?|metrics?|percentages?|dates?|titles?|summary|sections?|skills?)\b/i;
 
 /** Which kind of entry the instruction is talking about, when it says. */
 const KIND: Record<EntryKind, RegExp> = {
-  experience: /\b(jobs?|roles?|positions?|compan(?:y|ies)|employers?|gigs?|internships?)\b/i,
+  // "experience" was missing, and it is the word the app's own editor uses for
+  // the section: "Replace the Kudi Kitchen experience entry with the Rate
+  // Limit Lab project" named its kind precisely and was read as naming none.
+  experience: /\b(jobs?|roles?|positions?|compan(?:y|ies)|employers?|gigs?|internships?|experiences?|work\s+history)\b/i,
   projects: /\b(projects?)\b/i,
   education: /\b(degrees?|schools?|universit(?:y|ies)|education)\b/i,
 };
@@ -117,6 +136,34 @@ const DATE_NOUN = /\b(dates?|ended?|ending|started?|starting|until|since|graduat
 const NOW = /\b(present|current|currently|now|ongoing)\b/i;
 
 const SUMMARY = /\b(summary|profile statement|objective)\b/i;
+
+/**
+ * A sentence that puts one thing in and takes another out.
+ *
+ * Both halves name an entry and each half means the opposite, so reading the
+ * sentence whole mixes them. "Replace the Kudi Kitchen experience entry with
+ * the Rate Limit Lab project" says "project" about the thing coming IN, and
+ * read as one sentence that narrowed the removal to projects and let the job
+ * he named for removal through untouched.
+ */
+const SWAP_OUT_BEFORE = /\b(?:replace|replacing|replaced|swap|swapping|substitute|substituting)\b[\s\S]*?\b(with|for)\b/i;
+const SWAP_OUT_AFTER = /\b(?:instead\s+of|in\s+place\s+of)\b/i;
+
+/** The stretch of a sentence that says what to take OUT. */
+function outgoingHalf(text: string): { from: number; to: number } {
+  const before = SWAP_OUT_BEFORE.exec(text);
+  if (before) return { from: 0, to: before.index + before[0].length - before[1].length };
+  const after = SWAP_OUT_AFTER.exec(text);
+  if (after) return { from: after.index + after[0].length, to: text.length };
+  return { from: 0, to: text.length };
+}
+
+/** What to call an entry when its name alone cannot tell two of them apart. */
+const KIND_NOUN: Record<EntryKind, string> = {
+  experience: 'job',
+  projects: 'project',
+  education: 'degree',
+};
 const ADDING = /\b(add|adds|adding|write|writing|include|including|put|create|creating|give|need|want)\b/i;
 
 /** Words too generic to identify a company by their first token alone. */
@@ -145,14 +192,31 @@ function namesOf(name: string): string[] {
   return ways;
 }
 
-/** Where this name first appears in the text, or -1. */
-function whereNamed(text: string, name: string): number {
+/**
+ * Where this name first appears in the text, and where it ends, or -1.
+ *
+ * The END matters as much as the start, and only the written form gives it:
+ * "WesternBell International Ltd." is thirty characters of stored name and
+ * eleven of what somebody typed. Measured by the stored length, the gap after
+ * it ran past the next name entirely — which read "get rid of the WesternBell
+ * job but keep Aegon" as a list of two removals.
+ */
+function foundAt(text: string, name: string): { at: number; end: number } {
   let at = -1;
+  let end = -1;
   for (const way of namesOf(name)) {
     const found = patternFor(way).exec(text);
-    if (found && (at < 0 || found.index < at)) at = found.index;
+    if (found && (at < 0 || found.index < at)) {
+      at = found.index;
+      end = found.index + found[0].length;
+    }
   }
-  return at;
+  return { at, end };
+}
+
+/** Where this name first appears in the text, or -1. */
+function whereNamed(text: string, name: string): number {
+  return foundAt(text, name).at;
 }
 
 /** Whether a term is said in the text, with the matchers the rest of the app uses. */
@@ -175,7 +239,27 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
   const words = (text ?? '').trim();
   if (!words) return NOTHING_ASKED;
 
-  const removal = REMOVAL.exec(words);
+  /*
+   * "instead of" is a removal, except when it is a refusal of one.
+   *
+   * "use the Rate Limit Lab project instead of the Kudi Kitchen job" takes
+   * Kudi Kitchen off. "instead of removing Aegon, shorten it" says the
+   * opposite, in the same words, and granting that would delete a job the
+   * person had just asked to keep — the worst thing in this file. The two are
+   * told apart by what follows: a noun phrase is the thing going, a removal
+   * verb is the thing being refused.
+   */
+  const INSTEAD_OF_REMOVING = /\b(?:instead\s+of|in\s+place\s+of)\s+(?:\w+\s+){0,2}?(?:remov|delet|drop|cut|los|tak)/i;
+  const removal = (() => {
+    const found = REMOVAL.exec(words);
+    if (!found) return null;
+    if (!/^(?:instead|in)\b/i.test(found[0]) || !INSTEAD_OF_REMOVING.test(words)) return found;
+    // Look past it for a real one: "instead of removing Aegon, delete Droady".
+    const rest = REMOVAL.exec(words.slice(found.index + found[0].length));
+    if (!rest) return null;
+    rest.index += found.index + found[0].length;
+    return rest;
+  })();
   const maybe = MAYBE.exec(words);
   const verb = removal ?? maybe;
 
@@ -203,29 +287,131 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
    * application should remove; the profile is where it lives.
    */
   /** Every entry this instruction names, wherever in the sentence it sits. */
-  const named: { at: number; grant: Grant }[] = [];
+  const named: { at: number; end: number; grant: Grant }[] = [];
   for (const kind of ['experience', 'projects'] as EntryKind[]) {
     for (const entry of source[kind] ?? []) {
       const name = kind === 'experience' ? (entry as { org: string }).org : (entry as { name: string }).name;
-      const at = whereNamed(words, name);
-      if (at >= 0) named.push({ at, grant: { kind, name } });
+      const { at, end } = foundAt(words, name);
+      if (at >= 0) named.push({ at, end, grant: { kind, name } });
     }
   }
 
-  let grant: Grant | null = null;
+  const grants: Grant[] = [];
   let tied: string[] = [];
   if (removal && !refused && !aboutParts) {
-    const wanted: EntryKind[] = kindsNamed.length
-      ? kindsNamed.filter((kind) => kind !== 'education')
-      : ['experience', 'projects'];
+    /*
+     * The NAME wins, and a kind word only breaks a tie between two of them.
+     *
+     * It used to filter candidates by any kind word anywhere in the sentence,
+     * and a real instruction broke on it: "Replace the Kudi Kitchen
+     * experience entry with the Rate Limit Lab project" says "project" about
+     * the thing coming IN, which narrowed the removal to projects and
+     * excluded the job being named for removal. Nothing was licensed, the
+     * guard put Kudi Kitchen straight back, and the person was told their own
+     * instruction had been undone.
+     *
+     * A kind word still decides "remove the Kudi Kitchen project" where Kudi
+     * Kitchen is both a job and a project — but that is a tie between two
+     * entries at the same position, which is the only thing it is good for.
+     *
+     * Education is never a candidate. A degree is not something an edit to
+     * one application should remove; the profile is where it lives.
+     */
+    /*
+     * Only the half of the sentence that says what to take OUT.
+     *
+     * On a swap the other half is about the thing coming in, and its kind
+     * word belongs to that thing. See outgoingHalf.
+     */
+    const out = outgoingHalf(words);
+    const inScope = (at: number) => at >= out.from && at < out.to;
+    const kindsHere = (Object.keys(KIND) as EntryKind[]).filter((kind) =>
+      KIND[kind].test(words.slice(out.from, out.to)),
+    );
 
-    const after = named
-      .filter((n) => n.at > removal.index && wanted.includes(n.grant.kind))
-      .sort((a, b) => a.at - b.at);
-    const nearest = after[0];
-    const sharing = after.filter((f) => f.at === nearest?.at);
-    if (nearest && sharing.length === 1) grant = nearest.grant;
-    else if (sharing.length > 1) tied = sharing.map((f) => f.grant.name);
+    /*
+     * One grant per removal verb, because a sentence can ask twice.
+     *
+     * "Delete the second, duplicate Rate Limit Lab entry and remove Kudi
+     * Kitchen" is two removals, and reading only the first left the second
+     * unlicensed: the guard put Kudi Kitchen back and the person was told
+     * their instruction had been undone, for the second time in a row.
+     *
+     * Each verb takes the nearest entry after it that no earlier verb has
+     * already claimed, so the two do not both land on the same name.
+     */
+    const verbs = [...words.matchAll(new RegExp(REMOVAL.source, 'gi'))];
+    for (const at of verbs) {
+      const from = at.index ?? 0;
+      // Negation is per verb: "instead of removing Aegon, delete Droady"
+      // licenses neither, and "remove Aegon, don't touch Droady" licenses one.
+      if (negated(from)) continue;
+
+      const taken = new Set(grants.map((g) => `${g.kind}:${norm(g.name)}`));
+      const after = named
+        .filter(
+          (n) =>
+            n.at > from &&
+            n.grant.kind !== 'education' &&
+            inScope(n.at) &&
+            !taken.has(`${n.grant.kind}:${norm(n.grant.name)}`),
+        )
+        .sort((a, b) => a.at - b.at);
+      const nearest = after[0];
+      const sharing = after.filter((f) => f.at === nearest?.at);
+      const narrowed = kindsHere.length
+        ? sharing.filter((f) => kindsHere.includes(f.grant.kind))
+        : sharing;
+      const candidates = narrowed.length ? narrowed : sharing;
+
+    /*
+     * Two entries with the same name in the same section are one duplicate,
+     * not a choice. Asking "Rate Limit Lab or Rate Limit Lab?" is what a real
+     * version 4 did, on a page that had the project under two headings.
+     */
+      const distinct = candidates.filter(
+        (f, i) =>
+          candidates.findIndex(
+            (other) => other.grant.kind === f.grant.kind && norm(other.grant.name) === norm(f.grant.name),
+          ) === i,
+      );
+      if (distinct.length === 1) {
+        grants.push(distinct[0].grant);
+
+        /*
+         * And anything listed after it with nothing but glue between.
+         *
+         * "remove Aegon and Droady" is one verb and two entries, and taking
+         * only the nearest left the second unlicensed — the guard put it back
+         * and the person was told their instruction had been undone. The glue
+         * test is what keeps this safe: a verb between the two names means
+         * the second belongs to another clause.
+         */
+        let previous = distinct[0];
+        for (const next of after) {
+          if (next.at <= previous.at) continue;
+          if (!GLUE.test(words.slice(previous.end, next.at))) break;
+          // Two entries at one spot is the ambiguous case, not a list.
+          if (after.some((other) => other.at === next.at && other.grant.kind !== next.grant.kind)) break;
+          if (!grants.some((g) => g.kind === next.grant.kind && norm(g.name) === norm(next.grant.name))) {
+            grants.push(next.grant);
+          }
+          previous = next;
+        }
+      }
+      else if (distinct.length > 1 && !grants.length && !tied.length) {
+      /*
+       * Named by kind where the name cannot tell them apart.
+       *
+       * "Which one — Kudi Kitchen or Kudi Kitchen?" is a real question this
+       * asked, about a name that is both a job and a project. The answer it
+       * wanted was the kind, and it never said so.
+       */
+        const names = distinct.map((f) => f.grant.name);
+        const collides = new Set(names.map(norm)).size < names.length;
+        tied = distinct.map((f) => (collides ? `the ${f.grant.name} ${KIND_NOUN[f.grant.kind]}` : f.grant.name));
+      }
+    }
   }
 
   /*
@@ -243,7 +429,7 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
   ].filter((name) => typeof name === 'string' && name.trim());
 
   let ask: string | null = null;
-  if (!refused && !grant) {
+  if (!refused && !grants.length) {
     if (tied.length > 1) {
       ask = `Which one — ${listOf(tied, 'or')}?`;
     } else if (removal && aboutParts && named.length === 0 && everything.length > 1) {
@@ -271,7 +457,7 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
   return {
     words,
 
-    removes: (kind, name) => Boolean(grant) && grant!.kind === kind && norm(grant!.name) === norm(name),
+    removes: (kind, name) => grants.some((g) => g.kind === kind && norm(g.name) === norm(name)),
 
     /*
      * Worded as a removal and not acted on. "Cut the Aegon job" lands here: the
@@ -281,7 +467,7 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
      */
     nearlyRemoves: (name) => {
       if (!verb || refused || aboutParts) return false;
-      if (grant && norm(grant.name) === norm(name)) return false;
+      if (grants.some((g) => norm(g.name) === norm(name))) return false;
       const at = whereNamed(words, name);
       return at > verb.index;
     },

@@ -135,6 +135,21 @@ export function readRestore(text: string, dropped: DroppedEntry[], answer = ''):
     };
   }
 
+  /*
+   * A swap names what it wants, so only the name counts.
+   *
+   * The kind branches below are for "bring my jobs back". On a swap they
+   * misfire: "Replace the Kudi Kitchen EXPERIENCE entry with the Rate Limit
+   * Lab project" contains the word experience, which read as a request for
+   * every job the app had taken off — and quietly brought Western Bell back
+   * on a sentence that never mentioned it.
+   *
+   * Nothing, when the thing they named is not available: it is already on the
+   * page, or they have no such entry. Falling through to a kind would answer
+   * "put Rate Limit Lab in" with "here are all your projects".
+   */
+  if (swap) return null;
+
   const jobs = inOrder.filter((d) => d.section === 'experience');
   const projects = inOrder.filter((d) => d.section === 'projects');
 
@@ -219,15 +234,39 @@ export function withRestored<T extends { experience?: unknown; projects?: unknow
   entries: Restore['entries'],
 ): T {
   const out: Record<string, unknown> = { ...structure };
+  const name = (section: 'experience' | 'projects', entry: unknown) =>
+    String(((entry ?? {}) as any)[section === 'experience' ? 'org' : 'name'] ?? '')
+      .trim()
+      .toLowerCase();
+
   for (const section of ['experience', 'projects'] as const) {
     const back = entries.filter((e) => e.section === section);
     if (!back.length) continue;
     const list = [...((structure[section] as unknown[]) ?? [])];
+
+    /*
+     * Never a second copy of something already there.
+     *
+     * A real version 4 printed Rate Limit Lab twice. The app read "replace
+     * Kudi Kitchen with Rate Limit Lab" and restored the project; the model,
+     * handed the bullets by the person in the same breath, wrote the entry
+     * out as well. Both were right on their own and the page had the project
+     * under two headings.
+     *
+     * The copy on the page wins. It is the one that has been through the
+     * tailoring, the honesty check and the guard, where this one is a splice
+     * of an older version.
+     */
+    const here = new Set(list.map((entry) => name(section, entry)).filter(Boolean));
+
     // Lowest index first, so each insertion leaves the later ones still
     // pointing where they meant to. Past the end is appended rather than
     // refused — the page has changed since, and a job at the bottom is worth
     // more than a job nowhere.
     for (const entry of [...back].sort((a, b) => a.index - b.index)) {
+      const key = name(section, entry.entry);
+      if (key && here.has(key)) continue;
+      if (key) here.add(key);
       list.splice(Math.min(entry.index, list.length), 0, entry.entry);
     }
     out[section] = list;
