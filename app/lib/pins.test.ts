@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { missingPins, pinEntry, pinnedOverLine, pinsFromRules, readPins, unmatchedNames } from './pins';
+import { matchedLabels, missingPins, pinEntry, pinnedOverLine, pinsFromRules, readPins, unmatchedNames } from './pins';
 import type { ResumeStructure } from './types';
 
 /**
@@ -327,4 +327,41 @@ test('two jobs sharing a title are both pinned', () => {
   };
   const pins = pinsFromRules([rule(['Software Engineer'])], twice);
   assert.deepEqual(pins.map((p) => p.text), ['Droady', 'Celestica']);
+});
+
+// ── what the row says it matched ───────────────────────────────────────────
+
+test('a job resolves to its title and employer', () => {
+  // How somebody checks the app understood which job they meant. Repeating
+  // their own words back confirms nothing.
+  assert.deepEqual(matchedLabels({ kind: 'always_include', names: ['Aegon Wealth Manager'] }, RESUME), [
+    'Wealth Manager at Aegon',
+  ]);
+});
+
+test('one rule matching two jobs names both', () => {
+  const twice: ResumeStructure = {
+    ...RESUME,
+    experience: [
+      ...RESUME.experience,
+      { title: 'Software Engineer', org: 'Celestica', location: 'Toronto, ON', dates: '2024', bullets: ['a', 'b'] },
+    ],
+  };
+  assert.deepEqual(matchedLabels({ kind: 'always_include', names: ['Software Engineer'] }, twice), [
+    'Software Engineer at Droady',
+    'Software Engineer at Celestica',
+  ]);
+});
+
+test('a project and a skill read as themselves', () => {
+  assert.deepEqual(matchedLabels({ kind: 'always_include', names: ['Resumi', 'Figma', 'AI & Data'] }, RESUME), [
+    'Resumi',
+    'Figma',
+    'the AI & Data line',
+  ]);
+});
+
+test('nothing matched, nothing to list', () => {
+  assert.deepEqual(matchedLabels({ kind: 'always_include', names: ['Barclays'] }, RESUME), []);
+  assert.deepEqual(matchedLabels({ kind: 'max_pages', limit: 1 }, RESUME), []);
 });

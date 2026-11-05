@@ -320,3 +320,26 @@ test('a failure carries something to put in the instruction box', () => {
   const r = runChecks(resume({ summary: 'Spearheaded it.' }), forbid('spearheaded'));
   assert.ok(r[0].fix && r[0].fix.length > 0);
 });
+
+test('a checked pin reads as the entry, not as the rule’s wording', () => {
+  assert.equal(
+    describeCheck({ kind: 'always_include', names: ['Aegon Wealth Manager'] }, ['Wealth Manager at Aegon']),
+    'Checked — Wealth Manager at Aegon will never be dropped to fit a page limit.',
+  );
+});
+
+test('two matches are both named', () => {
+  assert.match(
+    describeCheck({ kind: 'always_include', names: ['Software Engineer'] }, [
+      'Software Engineer at Droady',
+      'Software Engineer at Celestica',
+    ])!,
+    /Droady and Software Engineer at Celestica will never be dropped/,
+  );
+});
+
+test('with nothing resolved it falls back to what they wrote', () => {
+  // The page passes no matches when it has no profile to resolve against —
+  // better their own words than an empty sentence.
+  assert.match(describeCheck({ kind: 'always_include', names: ['Aegon'] })!, /Aegon will never be dropped/);
+});

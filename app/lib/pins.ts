@@ -262,6 +262,42 @@ function whatItNames(name: string, structure: ResumeStructure): Pin[] {
   return found;
 }
 
+/**
+ * What a rule's names resolved to, as the person would recognise them.
+ *
+ * "Wealth Manager at Aegon", not "Aegon" — a title and an employer, because
+ * that is how somebody checks the app understood which job they meant. The
+ * rule's own phrasing is no use for that: it is the thing being verified.
+ *
+ * Shown on every checked rule rather than only on an ambiguous one. A
+ * threshold would leave the single-match case displaying text nobody had
+ * confirmed against anything, which is exactly how a rule reading "Always
+ * include the Aegon Wealth Manager experience entry" came to say "Checked"
+ * while pinning nothing at all.
+ */
+export function matchedLabels(check: unknown, structure: ResumeStructure): string[] {
+  const read = check as { kind?: string; names?: unknown } | null | undefined;
+  if (!read || read.kind !== 'always_include' || !Array.isArray(read.names)) return [];
+
+  const labels: string[] = [];
+  for (const raw of read.names) {
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (!name) continue;
+    for (const pin of whatItNames(name, structure)) {
+      const label =
+        pin.place === 'experience'
+          ? (() => {
+              const job = (structure.experience ?? []).find((e) => e.org === pin.text);
+              const title = (job?.title ?? '').replace(/\([^)]*\)/g, ' ').trim();
+              return title ? `${title} at ${pin.text}` : pin.text;
+            })()
+          : pin.label;
+      if (!labels.includes(label)) labels.push(label);
+    }
+  }
+  return labels;
+}
+
 /** The names on a rule's check that match nothing on this resume. */
 export function unmatchedNames(check: unknown, structure: ResumeStructure): string[] {
   const read = check as { kind?: string; names?: unknown } | null | undefined;

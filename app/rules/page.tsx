@@ -2,7 +2,7 @@ import AppNav from '../components/AppNav';
 import RulesShell, { type Rule } from '../components/rules/RulesShell';
 import { requireUserId } from '../server/auth';
 import { getProfile, getUser, listRules } from '../server/db/repository';
-import { unmatchedNames } from '../lib/pins';
+import { matchedLabels, unmatchedNames } from '../lib/pins';
 import type { ResumeStructure } from '../lib/types';
 
 /**
@@ -37,6 +37,7 @@ export default async function RulesPage() {
     source: r.source,
     check: (r.check as Rule['check']) ?? null,
     unmatched: structure ? unmatchedNames(r.check, structure) : [],
+    matched: structure ? matchedLabels(r.check, structure) : [],
   }));
 
   return (

@@ -31,6 +31,13 @@ export interface Rule {
    * row says instead of "Checked".
    */
   unmatched?: string[];
+  /**
+   * What its names resolved to, as the person would recognise them.
+   *
+   * Shown in place of the rule's own wording, so one rule matching two jobs
+   * says which two rather than repeating the words that matched them.
+   */
+  matched?: string[];
 }
 
 /**
@@ -306,7 +313,7 @@ export default function RulesShell({ initialRules }: { initialRules: Rule[] }) {
                         <span className="mt-1.5 flex items-center gap-2 text-[12px] text-ink-faint">
                           <Spinner /> Working out how to check this…
                         </span>
-                      ) : rule.unmatched?.length ? (
+                      ) : rule.unmatched?.length && !rule.matched?.length ? (
                         /*
                           * Checkable, and naming something they do not have.
                           *
@@ -331,7 +338,7 @@ export default function RulesShell({ initialRules }: { initialRules: Rule[] }) {
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="mt-[3px] shrink-0" aria-hidden="true">
                             <path d="M20 6L9 17l-5-5" />
                           </svg>
-                          {describeCheck(rule.check)}
+                          {describeCheck(rule.check, rule.matched)}
                         </span>
                       ) : (
                         <span className="mt-1.5 block text-[12px] leading-snug text-ink-faint">
@@ -339,6 +346,18 @@ export default function RulesShell({ initialRules }: { initialRules: Rule[] }) {
                           afterwards.
                         </span>
                       )}
+
+                      {/*
+                        * One rule can name something they have and something
+                        * they do not. The checked line above says what it
+                        * will do; this says what it cannot.
+                        */}
+                      {rule.check && rule.unmatched?.length && rule.matched?.length ? (
+                        <span className="mt-1 block text-[12px] leading-snug text-flag">
+                          {rule.unmatched.map((n) => `\u201c${n}\u201d`).join(', ')}{' '}
+                          {rule.unmatched.length === 1 ? 'matches' : 'match'} nothing in your profile.
+                        </span>
+                      ) : null}
 
                       {/* Shown while it can be acted on, then gone. */}
                       {conflict?.ruleId === rule.id ? (

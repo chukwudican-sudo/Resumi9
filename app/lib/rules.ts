@@ -74,7 +74,19 @@ export interface CheckableRule {
  * something it is not \u2014 and `check` is untyped jsonb in the database, so a kind
  * this build has never heard of can arrive at any time.
  */
-export function describeCheck(check: RuleCheck | null): string | null {
+export function describeCheck(
+  check: RuleCheck | null,
+  /**
+   * What an always_include rule's names resolved to on this person's resume.
+   *
+   * Given, it replaces the rule's own wording — "Wealth Manager at Aegon"
+   * rather than the "Aegon Wealth Manager" somebody typed — because the
+   * phrasing is the thing being verified and repeating it back confirms
+   * nothing. A rule whose name matched neither an employer nor a title said
+   * "Checked" for exactly this reason.
+   */
+  matched: readonly string[] = [],
+): string | null {
   if (!check) return null;
   switch (check.kind) {
     case 'forbidden_text': {
@@ -86,11 +98,11 @@ export function describeCheck(check: RuleCheck | null): string | null {
     case 'max_pages':
       return `Checked \u2014 your resume must fit on ${check.limit} ${check.limit === 1 ? 'page' : 'pages'}.`;
     case 'always_include': {
-      if (!check.names.length) return null;
-      const named = check.names.length > 1
-        ? `${check.names.slice(0, -1).join(', ')} and ${check.names[check.names.length - 1]}`
-        : check.names[0];
-      return `Checked \u2014 ${named} will never be dropped to fit a page limit.`;
+      const names = matched.length ? matched : check.names;
+      if (!names.length) return null;
+      const listed =
+        names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+      return `Checked \u2014 ${listed} will never be dropped to fit a page limit.`;
     }
     default:
       return null;
