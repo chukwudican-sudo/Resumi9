@@ -176,6 +176,8 @@ export interface EntryInput {
   place: { city: string | null; region: string | null; country: string | null };
   url: string;
   extra: Record<string, string>;
+  /** Never drop this entry to reach a page limit. See the schema. */
+  alwaysInclude?: boolean;
 }
 
 export async function saveEntry(entry: EntryInput): Promise<string> {
@@ -253,7 +255,7 @@ async function restoreEntriesFor(userId: string, rows: ProfileEntryRow[]) {
   await restoreEntries(userId, keep);
 }
 
-export async function saveSkills(groups: { category: string; items: string }[]) {
+export async function saveSkills(groups: { category: string; items: string; alwaysInclude?: boolean }[]) {
   const userId = await requireUserId();
   await saveSkillGroups(userId, groups.slice(0, 8));
   await refreshMasterResume(userId);

@@ -10,6 +10,8 @@ import SectionHeading from './SectionHeading';
 export interface SkillGroup {
   category: string;
   items: string;
+  /** Never drop this line to reach a page limit. Skills only. */
+  alwaysInclude?: boolean;
 }
 
 const SUGGESTED = ['Languages', 'Frameworks', 'Tools', 'Databases', 'Cloud'];
@@ -282,6 +284,32 @@ export default function SkillsSection({
               value with no label beside it. An empty form is not a problem when
               the button to add one back is directly underneath.
             */}
+            {/*
+              * Never drop this line to reach a page limit.
+              *
+              * Only on skills: a Languages section is not something a page
+              * limit reaches, and the fitter spends skills lines FIRST, which
+              * makes this the one place the toggle earns its space.
+              */}
+            {isSkills ? (
+              <label
+                className="flex shrink-0 cursor-pointer items-center gap-1.5 pt-3 text-[11.5px] text-ink-muted transition hover:text-ink"
+                title="Never drop this line to fit a page limit"
+              >
+                <input
+                  type="checkbox"
+                  checked={row.alwaysInclude === true}
+                  onChange={(e) => {
+                    const next = [...rows];
+                    next[i] = { ...row, alwaysInclude: e.target.checked };
+                    edit(next);
+                    setSaved(false);
+                  }}
+                  className="h-[14px] w-[14px] accent-accent"
+                />
+                Always
+              </label>
+            ) : null}
             <button
               type="button"
               onClick={() => removeRow(i)}

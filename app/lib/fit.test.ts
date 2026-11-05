@@ -841,3 +841,58 @@ test('no pins at all behaves exactly as before', async () => {
   assert.deepEqual(withEmpty.log, withNone.log);
   assert.deepEqual((withEmpty.structure.skills ?? []).map((g) => g.category), (withNone.structure.skills ?? []).map((g) => g.category));
 });
+
+test('a pinned entry is never dropped', async () => {
+  /*
+   * The law, stated once and tested generally.
+   *
+   * It replaces two checks that named a particular employer, from a bug
+   * report about one person's resume. "Aegon must be on every resume" is a
+   * fact about one account; "a pinned entry is never dropped" is the rule the
+   * app actually owes everybody, and the account is one instance of it.
+   *
+   * Every entry is pinned here and the meter is set so the page cannot be
+   * reached, which is the hardest case: the fitter has nothing it is allowed
+   * to spend and must say so rather than spend one anyway.
+   */
+  const everything = [
+    ...PINNED.experience.map((e) => ({ place: 'experience' as const, text: e.org, label: e.org })),
+    ...PINNED.projects.map((p) => ({ place: 'projects' as const, text: p.name, label: p.name })),
+  ];
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: PINNED.experience.map((e) => drop('experience', e.org, e.dates)),
+    pinned: everything,
+    posting: 'Nothing matches anything.',
+    measure: andSkills(6),
+    affords: always,
+  });
+
+  assert.deepEqual(
+    result.structure.experience.map((e) => e.org),
+    PINNED.experience.map((e) => e.org),
+    'every pinned job is still there',
+  );
+  assert.deepEqual(
+    result.structure.projects.map((p) => p.name),
+    PINNED.projects.map((p) => p.name),
+    'and every pinned project',
+  );
+  assert.match(result.warnings[0] ?? '', /You asked to keep/);
+});
+
+test('a pinned entry is never dropped, whatever the model ranked first', async () => {
+  // The ranking is the model's and the pin is the person's. Measured on a
+  // real run: a model ranked a wealth-management job last for a robotics
+  // posting — defensible relevance, and not its call to make.
+  const result = await fitToPages(PINNED, {
+    target: 1,
+    cuts: [drop('experience', 'Kudi Kitchen', 'Jan 2024 – Aug 2024')],
+    pinned: [{ place: 'experience', text: 'Kudi Kitchen', label: 'Kudi Kitchen' }],
+    posting: 'Nothing matches.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.ok(result.structure.experience.some((e) => e.org === 'Kudi Kitchen'));
+  assert.equal(result.pages, 1, 'and it still fits, because something unpinned gave');
+});

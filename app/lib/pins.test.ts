@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { missingPins, pinEntry, pinnedOverLine, readPins } from './pins';
+import { alwaysInclude, missingPins, pinEntry, pinnedOverLine, readPins } from './pins';
 import type { ResumeStructure } from './types';
 
 /**
@@ -188,38 +188,50 @@ test('several of them read as a list', () => {
   assert.match(line, /they are kept/);
 });
 
-// ── a standing rule ────────────────────────────────────────────────────────
+// ── what the person marked, rather than what they wrote ────────────────────
 //
-// This one was sitting active on a real account, going to the model as prompt
-// text and binding nothing. The resume for the posting it was written for
-// dropped Aegon anyway.
+// Pins were briefly read out of the text of written rules. That is gone: a
+// regex over free prose is fragile, nothing on screen showed what had been
+// bound, and a sentence meant as guidance became a constraint the fitter
+// could not spend. The marking is a toggle now, and this reads the toggles.
 
-const THE_RULE =
-  'Include the Aegon Wealth Manager experience entry (at least 2 bullets) whenever it fits on one page. ' +
-  'Only drop it when a clearly more relevant technical project or experience needs the space.';
-
-test('a rule saying to include an entry pins it', () => {
-  const pins = readPins(THE_RULE, RESUME, true);
-  assert.deepEqual(pins.map((p) => p.text), ['Aegon']);
-  assert.equal(pins[0].place, 'experience');
+test('a marked entry becomes a pin', () => {
+  const pins = alwaysInclude({ entries: [{ kind: 'experience', name: 'Aegon' }], skills: [] }, RESUME);
+  assert.deepEqual(pins, [{ place: 'experience', text: 'Aegon', label: 'Aegon' }]);
 });
 
-test('the same sentence in the change box is read as an addition', () => {
-  // "include X" typed into the box is work for the model. Only a standing
-  // rule reads it as a promise about the page.
-  assert.deepEqual(readPins(THE_RULE, RESUME), []);
+test('a marked project is pinned as a project', () => {
+  const pins = alwaysInclude({ entries: [{ kind: 'project', name: 'Resumi' }], skills: [] }, RESUME);
+  assert.deepEqual(pins.map((p) => p.place), ['projects']);
 });
 
-test('a page rule pins nothing, because it names nothing', () => {
-  assert.deepEqual(readPins('Keep the resume one page', RESUME, true), []);
-  assert.deepEqual(readPins('Keep it to one page, 10pt or larger', RESUME, true), []);
+test('a marked skills line becomes a pin', () => {
+  const pins = alwaysInclude({ entries: [], skills: ['AI & Data'] }, RESUME);
+  assert.deepEqual(pins, [{ place: 'skills', text: 'AI & Data', label: 'the AI & Data line' }]);
 });
 
-test('a rule about wording pins nothing', () => {
-  assert.deepEqual(readPins('Never use the word synergy', RESUME, true), []);
-  assert.deepEqual(readPins('Always write in past tense', RESUME, true), []);
+test('a marking for something not on this resume is quietly nothing', () => {
+  // A promise the fitter cannot keep would otherwise report the page rule as
+  // unmeetable for ever.
+  const pins = alwaysInclude(
+    { entries: [{ kind: 'experience', name: 'A job they deleted' }], skills: ['A line they emptied'] },
+    RESUME,
+  );
+  assert.deepEqual(pins, []);
 });
 
-test('a rule naming a skill pins the skill', () => {
-  assert.deepEqual(readPins('Always include Figma in my skills', RESUME, true).map((p) => p.text), ['Figma']);
+test('a marking on education is already true, so it pins nothing', () => {
+  // Education is never cut to reach a page limit, whatever the ranking says.
+  assert.deepEqual(alwaysInclude({ entries: [{ kind: 'education', name: 'Ontario Tech University' }], skills: [] }, RESUME), []);
+});
+
+test('nothing marked is no pins', () => {
+  assert.deepEqual(alwaysInclude({ entries: [], skills: [] }, RESUME), []);
+});
+
+test('written rules are not read as pins', () => {
+  // The whole point of the toggle. This sentence was a pin for one commit.
+  const rule =
+    'Include the Aegon Wealth Manager experience entry (at least 2 bullets) whenever it fits on one page.';
+  assert.deepEqual(readPins(rule, RESUME), []);
 });

@@ -154,6 +154,17 @@ export const profileEntries = pgTable('profile_entries', {
   url: text('url'),
   /** Optional extras a section may carry — GPA, honours, employment type. */
   extra: jsonb('extra').notNull().default({}),
+  /**
+   * Never drop this entry to reach a page limit.
+   *
+   * A toggle beside the entry rather than something inferred. It WAS inferred
+   * once — read out of the text of the person's written rules — and that was
+   * wrong three ways at once: a regex over free prose is fragile, nothing on
+   * screen showed what had been bound, and a sentence meant as guidance
+   * silently became a constraint the fitter could not spend. Written rules
+   * stay guidance to the model; this is the hard one, and it is visible.
+   */
+  alwaysInclude: boolean('always_include').notNull().default(false),
   /** 0 is most recent. Drives both resume order and which gaps get asked about first. */
   orderIndex: integer('order_index').notNull().default(0),
   /**
@@ -238,6 +249,13 @@ export const facts = pgTable('facts', {
   source: text('source').notNull().default('interview'),
   sourceTurnId: text('source_turn_id'),
   status: text('status').notNull().default('active'),
+  /**
+   * Never drop this to reach a page limit. See profileEntries.alwaysInclude.
+   *
+   * On facts because that is where a skills line lives: one row holding a
+   * category and its items.
+   */
+  alwaysInclude: boolean('always_include').notNull().default(false),
   createdAt: createdAt(),
 }, (t) => ({
   entryIdx: index('facts_entry_idx').on(t.userId, t.entryId, t.category),
