@@ -453,9 +453,15 @@ export const RULE_INTAKE_TOOL: Anthropic.Tool = {
     properties: {
       checkKind: {
         type: 'string',
-        enum: ['forbidden_text', 'max_bullet_chars', 'max_pages', 'none'],
+        enum: ['forbidden_text', 'max_bullet_chars', 'max_pages', 'always_include', 'none'],
         description:
-          'How this rule could be verified against a finished resume by a program, with no judgement. "forbidden_text" when the rule forbids specific words or names appearing anywhere — "never say spearheaded", "call it Ontario Tech not UOIT" (forbid UOIT), "do not put my GPA on anything" (forbid GPA). "max_bullet_chars" when it caps bullet length. "max_pages" when it caps how many pages the whole resume runs to — "keep it to one page", "never more than two pages", "one page max". "none" for everything else, which is most rules: anything about emphasis, ordering, tone, what to lead with, or how something should read is guidance a program cannot check. Choose "none" rather than stretching — a wrong check reports failures that are not real, and the person cannot tell why.',
+          'How this rule could be verified against a finished resume by a program, with no judgement. "forbidden_text" when the rule forbids specific words or names appearing anywhere — "never say spearheaded", "call it Ontario Tech not UOIT" (forbid UOIT), "do not put my GPA on anything" (forbid GPA). "max_bullet_chars" when it caps bullet length. "max_pages" when it caps how many pages the whole resume runs to — "keep it to one page", "never more than two pages", "one page max". "none" for everything else, which is most rules: anything about emphasis, ordering, tone, what to lead with, or how something should read is guidance a program cannot check. "always_include" when the rule says a NAMED job, project or skill must always stay on the resume — "always include the Aegon job", "never drop Figma", "Droady has to be on every resume". The name is the test: a rule asking to keep something it does not name, or to prefer something where possible, is guidance and not this. Choose "none" rather than stretching — a wrong check reports failures that are not real, and the person cannot tell why.',
+      },
+      names: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'For always_include only: what must stay, as the person would name it on their resume — an employer, a project name, or one skill. Bare names, no quotes, no explanation, and nothing they did not name. Empty for any other kind.',
       },
       terms: {
         type: 'array',
@@ -479,7 +485,7 @@ export const RULE_INTAKE_TOOL: Anthropic.Tool = {
           'One short sentence saying what the contradiction is, addressed to the person who wrote both. Empty when conflictsWith is 0.',
       },
     },
-    required: ['checkKind', 'terms', 'limit', 'conflictsWith', 'conflictReason'],
+    required: ['checkKind', 'names', 'terms', 'limit', 'conflictsWith', 'conflictReason'],
     additionalProperties: false,
   },
 };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { alwaysInclude, missingPins, pinEntry, pinnedOverLine, readPins } from './pins';
+import { missingPins, pinEntry, pinnedOverLine, pinsFromRules, readPins } from './pins';
 import type { ResumeStructure } from './types';
 
 /**
@@ -188,50 +188,68 @@ test('several of them read as a list', () => {
   assert.match(line, /they are kept/);
 });
 
-// ── what the person marked, rather than what they wrote ────────────────────
+// ── pins from a standing rule's check ──────────────────────────────────────
 //
-// Pins were briefly read out of the text of written rules. That is gone: a
-// regex over free prose is fragile, nothing on screen showed what had been
-// bound, and a sentence meant as guidance became a constraint the fitter
-// could not spend. The marking is a toggle now, and this reads the toggles.
+// Pins were briefly read out of the TEXT of written rules by a regex at
+// tailor time. That was fragile on free prose, invisible — nothing on screen
+// said what had been bound — and it turned a sentence somebody meant as
+// guidance into a constraint. The meaning is read once now, when the rule is
+// written, and this reads the stored reading.
 
-test('a marked entry becomes a pin', () => {
-  const pins = alwaysInclude({ entries: [{ kind: 'experience', name: 'Aegon' }], skills: [] }, RESUME);
-  assert.deepEqual(pins, [{ place: 'experience', text: 'Aegon', label: 'Aegon' }]);
+const rule = (names: string[]) => ({ check: { kind: 'always_include', names } });
+
+test('a rule naming a job pins the job', () => {
+  assert.deepEqual(pinsFromRules([rule(['Aegon'])], RESUME), [
+    { place: 'experience', text: 'Aegon', label: 'Aegon' },
+  ]);
 });
 
-test('a marked project is pinned as a project', () => {
-  const pins = alwaysInclude({ entries: [{ kind: 'project', name: 'Resumi' }], skills: [] }, RESUME);
-  assert.deepEqual(pins.map((p) => p.place), ['projects']);
+test('a rule naming a project pins the project', () => {
+  assert.deepEqual(pinsFromRules([rule(['Resumi'])], RESUME).map((p) => p.place), ['projects']);
 });
 
-test('a marked skills line becomes a pin', () => {
-  const pins = alwaysInclude({ entries: [], skills: ['AI & Data'] }, RESUME);
-  assert.deepEqual(pins, [{ place: 'skills', text: 'AI & Data', label: 'the AI & Data line' }]);
+test('a name on both lists pins both', () => {
+  // Kudi Kitchen is a job and a project here. Keeping too much is answered
+  // with a sentence; keeping too little is answered with a resume that lost it.
+  assert.deepEqual(pinsFromRules([rule(['Kudi Kitchen'])], RESUME).map((p) => p.place), ['experience', 'projects']);
 });
 
-test('a marking for something not on this resume is quietly nothing', () => {
-  // A promise the fitter cannot keep would otherwise report the page rule as
-  // unmeetable for ever.
-  const pins = alwaysInclude(
-    { entries: [{ kind: 'experience', name: 'A job they deleted' }], skills: ['A line they emptied'] },
-    RESUME,
+test('a rule naming a skills line pins the line', () => {
+  assert.deepEqual(pinsFromRules([rule(['AI & Data'])], RESUME), [
+    { place: 'skills', text: 'AI & Data', label: 'the AI & Data line' },
+  ]);
+});
+
+test('a rule naming one tool pins the tool', () => {
+  assert.deepEqual(pinsFromRules([rule(['Figma'])], RESUME).map((p) => p.text), ['Figma']);
+});
+
+test('several rules, and the same name twice, pin once each', () => {
+  const pins = pinsFromRules([rule(['Aegon', 'Figma']), rule(['Aegon'])], RESUME);
+  assert.deepEqual(pins.map((p) => p.text), ['Aegon', 'Figma']);
+});
+
+test('a name that is not on this resume pins nothing', () => {
+  // A rule outlives a profile edit, and a promise the fitter cannot keep
+  // would report the page rule as unmeetable for ever.
+  assert.deepEqual(pinsFromRules([rule(['A job they deleted'])], RESUME), []);
+});
+
+test('a rule with no check binds nothing', () => {
+  // The ambiguous ones. They show as guidance on the rules page and reach the
+  // model as prose, which is all they ever claimed to do.
+  assert.deepEqual(pinsFromRules([{ check: null }, {}], RESUME), []);
+  assert.deepEqual(pinsFromRules([{ check: { kind: 'max_pages', limit: 1 } }], RESUME), []);
+});
+
+test('a malformed check is ignored rather than thrown on', () => {
+  // `check` is untyped jsonb, so a shape written by another build can arrive.
+  assert.deepEqual(
+    pinsFromRules([{ check: { kind: 'always_include' } }, { check: { kind: 'always_include', names: 'Aegon' } }], RESUME),
+    [],
   );
-  assert.deepEqual(pins, []);
 });
 
-test('a marking on education is already true, so it pins nothing', () => {
-  // Education is never cut to reach a page limit, whatever the ranking says.
-  assert.deepEqual(alwaysInclude({ entries: [{ kind: 'education', name: 'Ontario Tech University' }], skills: [] }, RESUME), []);
-});
-
-test('nothing marked is no pins', () => {
-  assert.deepEqual(alwaysInclude({ entries: [], skills: [] }, RESUME), []);
-});
-
-test('written rules are not read as pins', () => {
-  // The whole point of the toggle. This sentence was a pin for one commit.
-  const rule =
-    'Include the Aegon Wealth Manager experience entry (at least 2 bullets) whenever it fits on one page.';
-  assert.deepEqual(readPins(rule, RESUME), []);
+test('a rule naming a degree pins nothing, because education is never cut', () => {
+  assert.deepEqual(pinsFromRules([rule(['Ontario Tech University'])], RESUME), []);
 });

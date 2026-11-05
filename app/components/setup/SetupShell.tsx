@@ -279,10 +279,9 @@ export default function SetupShell({
         .filter((f) => f.category === 'skill')
         .map((f) => {
           const colon = f.text.indexOf(':');
-          const marked = (f as { alwaysInclude?: boolean }).alwaysInclude === true;
           return colon > 0
-            ? { category: f.text.slice(0, colon).trim(), items: f.text.slice(colon + 1).trim(), alwaysInclude: marked }
-            : { category: 'Skills', items: f.text.trim(), alwaysInclude: marked };
+            ? { category: f.text.slice(0, colon).trim(), items: f.text.slice(colon + 1).trim() }
+            : { category: 'Skills', items: f.text.trim() };
         }),
     [facts],
   );

@@ -11,6 +11,7 @@ import { toCheck, type ToolResult } from './ruleIntake';
  */
 const reading = (over: Partial<ToolResult>): ToolResult => ({
   checkKind: 'none',
+  names: [],
   terms: [],
   limit: 0,
   conflictsWith: 0,
@@ -53,4 +54,45 @@ test('the kinds that already existed read exactly as before', () => {
   });
   assert.equal(toCheck(reading({ checkKind: 'max_bullet_chars', limit: 12 })), null);
   assert.equal(toCheck(reading({ checkKind: 'none' })), null);
+});
+
+// ── always_include ─────────────────────────────────────────────────────────
+//
+// The one check that changes what the app DOES rather than how it grades the
+// result. It replaced a regex over rule text run at tailor time: fragile on
+// free prose, invisible, and it turned sentences meant as guidance into
+// constraints. Read once here instead, and shown beside the rule.
+
+test('a named entry becomes a check', () => {
+  const check = toCheck(reading({ checkKind: 'always_include', names: ['Aegon'] }));
+  assert.deepEqual(check, { kind: 'always_include', names: ['Aegon'] });
+});
+
+test('several named things, as the person wrote them', () => {
+  const check = toCheck(reading({ checkKind: 'always_include', names: ['Aegon', 'Droady', 'Figma'] }));
+  assert.deepEqual(check, { kind: 'always_include', names: ['Aegon', 'Droady', 'Figma'] });
+});
+
+test('checkable but naming nothing is nothing', () => {
+  // The model saying "checkable" and then not saying what to check. Stored,
+  // it would produce a rule that can never fail.
+  assert.equal(toCheck(reading({ checkKind: 'always_include', names: [] })), null);
+  assert.equal(toCheck(reading({ checkKind: 'always_include', names: ['  ', ''] })), null);
+});
+
+test('a name too short to identify anything, and a sentence instead of a name', () => {
+  assert.equal(toCheck(reading({ checkKind: 'always_include', names: ['AI'] })), null);
+  assert.equal(
+    toCheck(reading({
+      checkKind: 'always_include',
+      names: ['the job I had at the bank before I went back to university full time'],
+    })),
+    null,
+  );
+});
+
+test('a handful at most', () => {
+  const many = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'];
+  const check = toCheck(reading({ checkKind: 'always_include', names: many }));
+  assert.equal(check?.kind === 'always_include' && check.names.length, 6);
 });

@@ -21,14 +21,13 @@ import { asLines } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
-import { alwaysInclude, type Pin } from '../../../../lib/pins';
+import { pinsFromRules, type Pin } from '../../../../lib/pins';
 import { CLAIM_CHECK_ESTIMATE_MS, COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
 import { pageTarget, type RuleCheck } from '../../../../lib/rules';
 import {
   getActiveRules,
   getUser,
   getApplication,
-  getAlwaysIncluded,
   getLatestResume,
   getProfile,
   getSupportingFacts,
@@ -69,7 +68,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     return errorResponse({ type: 'auth', message: 'Your API key may be invalid or out of credits.' }, 500);
   }
 
-  const [record, profile, rules, user, supporting, lastVersion, marked] = await Promise.all([
+  const [record, profile, rules, user, supporting, lastVersion] = await Promise.all([
     getApplication(userId, params.id),
     getProfile(userId),
     getActiveRules(userId),
@@ -86,8 +85,6 @@ export async function POST(_request: Request, { params }: { params: { id: string
      * one version ago, which is the loop this closes.
      */
     getLatestResume(userId, params.id),
-    // What they have marked to always include, which the fitter may not spend.
-    getAlwaysIncluded(userId),
   ]);
 
   if (!record) return errorResponse({ type: 'generic', message: 'Application not found.' }, 404);
@@ -305,7 +302,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     const guarded = validateTailored(structure, honest.structure, {
       // Their answered facts are part of their record, so a skill one of them
       // names is theirs to list. Figma was in the facts and in no skills line.
-      alsoSaid: supporting.map((fact: { text: string }) => fact.text).join(' \n '),
+      alsoSaid: supporting.map((fact) => fact.text).join(' \n '),
     });
     const surfaced = surfaceRepairs(guarded.repairs);
 
@@ -364,18 +361,16 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // actually mentions, read off the posting's whole text.
       posting: postingWords,
       /*
-       * What they have marked to always include, and what this application
-       * has been asked to keep.
+       * Their standing rules, then whatever this application was asked to keep.
        *
-       * Deliberately NOT read out of their written rules. A rule is prose and
-       * a pin is a constraint, and deriving one from the other was wrong in
-       * three ways at once: a regex over free text is fragile, nothing on
-       * screen showed what had been bound, and a sentence meant as guidance
-       * silently became a rule the fitter could not spend. Rules stay soft
-       * guidance to the model; the toggle beside an entry is the hard one.
+       * A rule reaches the fitter through its stored check — read once when
+       * the rule was written, shown on the rules page — never through a regex
+       * over its text. A per-application promise comes from the change box
+       * and stays with the application: the rule is the standing one, and the
+       * exception belongs to the job it was made for.
        */
       pinned: [
-        ...alwaysInclude(marked, structure),
+        ...pinsFromRules(rules, structure),
         ...((lastVersion?.pins as Pin[]) ?? []).filter((pin) => pin && pin.place && pin.text),
       ],
       /*

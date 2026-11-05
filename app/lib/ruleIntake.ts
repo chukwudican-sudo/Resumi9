@@ -19,7 +19,9 @@ const PROMPT = `You read one rule a person has written for their own resume, and
 
 FIRST: whether the rule describes something a program could verify against a finished resume, with no judgement involved.
 
-Most rules do not, and "none" is the right answer far more often than not. Anything about emphasis, ordering, tone, framing, what to lead with, or how something should read is guidance — a person could disagree about whether it was followed, so a program cannot decide it. Only choose a check when the rule is about the literal presence of specific words, or a countable length.
+Most rules do not, and "none" is the right answer far more often than not. Anything about emphasis, ordering, tone, framing, what to lead with, or how something should read is guidance — a person could disagree about whether it was followed, so a program cannot decide it. Only choose a check when the rule is about the literal presence of specific words, a countable length, or a NAMED thing that must always stay on the resume.
+
+That last one is the only check that changes what the app does rather than how it grades the result: a job, project or skill the rule names is one the app will not take off to reach a page limit, and it will say so rather than doing it quietly. The name is the test. "Always include the Aegon job" names one; "keep my strongest work on the page" names nothing and is guidance. A rule that says to keep something AND gives a condition — "whenever it fits", "unless something better needs the space" — still names it, so it is still a check: the person can read what the app will do and reword it if that is not what they meant.
 
 A wrong check is worse than no check. It reports failures that are not real, on a resume the person cannot see anything wrong with, and they have no way to work out why. When in doubt, choose "none" — the rule still goes to the model as guidance and still shapes every resume.
 
@@ -35,7 +37,8 @@ export interface RuleReading {
 }
 
 export interface ToolResult {
-  checkKind: 'forbidden_text' | 'max_bullet_chars' | 'max_pages' | 'none';
+  checkKind: 'forbidden_text' | 'max_bullet_chars' | 'max_pages' | 'always_include' | 'none';
+  names: string[];
   terms: string[];
   limit: number;
   conflictsWith: number;
@@ -109,6 +112,28 @@ export function toCheck(t: ToolResult): RuleCheck | null {
   if (t.checkKind === 'max_pages') {
     const pages = Math.round(t.limit);
     return pages >= 1 && pages <= 5 ? { kind: 'max_pages', limit: pages } : null;
+  }
+  /*
+   * The other rule that changes what the tailor DOES.
+   *
+   * Pins used to be read straight out of rule text by a regex at tailor time,
+   * which was wrong three ways: fragile on free prose, invisible — nothing on
+   * screen said what had been bound — and it turned a sentence somebody meant
+   * as guidance into a constraint. This is the same intent through the
+   * mechanism the rules page already had: the meaning is read once, the
+   * reading is shown beside the rule, and the fitter obeys the reading.
+   *
+   * A name is the whole test. "Always include Aegon" is a check; "keep the
+   * strongest work on the page" names nothing and stays guidance.
+   */
+  if (t.checkKind === 'always_include') {
+    const names = (t.names ?? [])
+      .map((x) => x.trim())
+      // Two characters cannot identify a job, and a long one is a sentence
+      // rather than a name — both would match wrongly or not at all.
+      .filter((x) => x.length >= 3 && x.length <= 60)
+      .slice(0, 6);
+    return names.length ? { kind: 'always_include', names } : null;
   }
   return null;
 }

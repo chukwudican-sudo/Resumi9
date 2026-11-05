@@ -184,6 +184,32 @@ export function runChecks(
         return { ...base, verdict: 'pass' };
       }
 
+      /*
+       * The one check that should never fail, and says so when it does.
+       *
+       * The fitter is told the same names and may not spend them, so a
+       * failure here means something else took it off — a tailor that
+       * dropped it and a guard that could not match it back, or a person
+       * removing it from their profile while the rule still names it. Worth
+       * reporting for exactly that reason: it is the app disagreeing with
+       * itself, and silence would hide it.
+       */
+      case 'always_include': {
+        const missing = rule.check.names.filter(
+          (name) => !fields.some((f) => mentions(f.text, name)),
+        );
+        if (!missing.length) return { ...base, verdict: 'pass' };
+        return {
+          ...base,
+          verdict: 'fail',
+          evidence:
+            missing.length === 1
+              ? `${missing[0]} is not on this resume.`
+              : `${missing.join(', ')} are not on this resume.`,
+          fix: `Ask for ${missing.join(' and ')} back in the change box, or take ${missing.length === 1 ? 'it' : 'them'} out of this rule.`,
+        };
+      }
+
       case 'max_bullet_chars': {
         const limit = rule.check.limit;
         const over = bullets.filter((b) => b.text.length > limit);

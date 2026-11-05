@@ -27,7 +27,19 @@ export type RuleCheck =
   /** "Keep every bullet to one line." */
   | { kind: 'max_bullet_chars'; limit: number }
   /** "Keep it to one page." Checked against the rendered PDF, not a guess. */
-  | { kind: 'max_pages'; limit: number };
+  | { kind: 'max_pages'; limit: number }
+  /**
+   * "Always include the Aegon job." "Never drop Figma from my skills."
+   *
+   * The one check that constrains the app rather than grading it. The others
+   * read a finished resume and say whether it holds; this one reaches the
+   * fitter, which may not spend what it names — see pins.ts.
+   *
+   * Names only, resolved against the resume being fitted rather than stored
+   * as positions: an entry moves, gets renamed, or is not on a given resume at
+   * all, and a rule should survive all three.
+   */
+  | { kind: 'always_include'; names: string[] };
 
 /** Whether a rule held on one resume, and where it did not. */
 export interface RuleResult {
@@ -73,6 +85,13 @@ export function describeCheck(check: RuleCheck | null): string | null {
       return `Checked \u2014 no bullet longer than ${check.limit} characters.`;
     case 'max_pages':
       return `Checked \u2014 your resume must fit on ${check.limit} ${check.limit === 1 ? 'page' : 'pages'}.`;
+    case 'always_include': {
+      if (!check.names.length) return null;
+      const named = check.names.length > 1
+        ? `${check.names.slice(0, -1).join(', ')} and ${check.names[check.names.length - 1]}`
+        : check.names[0];
+      return `Checked \u2014 ${named} will never be dropped to fit a page limit.`;
+    }
     default:
       return null;
   }

@@ -315,45 +315,6 @@ export async function getActiveFacts(userId: string) {
  * edit them; but an answer given once should keep paying out on every job after
  * it, which is exactly what the panel that collects them promises.
  */
-/**
- * What this person has marked "always include".
- *
- * Two lists because they live in two tables: an entry is a profile_entries
- * row, and a skills line is a fact. Names rather than ids, because the fitter
- * works on a resume structure built from these rows and matches on what
- * things are called.
- */
-export async function getAlwaysIncluded(userId: string): Promise<{
-  entries: { kind: string; name: string }[];
-  skills: string[];
-}> {
-  const [entries, skills] = await Promise.all([
-    db
-      .select({ kind: profileEntries.kind, org: profileEntries.org, title: profileEntries.title })
-      .from(profileEntries)
-      .where(and(eq(profileEntries.userId, userId), eq(profileEntries.alwaysInclude, true))),
-    db
-      .select({ text: facts.text })
-      .from(facts)
-      .where(
-        and(
-          eq(facts.userId, userId),
-          eq(facts.category, 'skill'),
-          eq(facts.status, 'active'),
-          eq(facts.alwaysInclude, true),
-        ),
-      ),
-  ]);
-
-  return {
-    entries: entries.map((row) => ({ kind: row.kind, name: (row.org || row.title || '').trim() })),
-    // A skills fact reads "Category: items", and the category is the line.
-    skills: skills
-      .map((row) => (row.text.includes(':') ? row.text.slice(0, row.text.indexOf(':')) : row.text).trim())
-      .filter(Boolean),
-  };
-}
-
 export async function getSupportingFacts(userId: string) {
   return db
     .select({
@@ -1041,9 +1002,7 @@ export async function getResumeInputs(userId: string) {
       .where(eq(profileEntries.userId, userId))
       .orderBy(profileEntries.kind, profileEntries.orderIndex),
     db
-      // alwaysInclude comes along so the editor can show the toggle as it is
-      // rather than as off. The resume builder ignores it.
-      .select({ category: facts.category, text: facts.text, alwaysInclude: facts.alwaysInclude })
+      .select({ category: facts.category, text: facts.text })
       .from(facts)
       .where(and(eq(facts.userId, userId), eq(facts.status, 'active'))),
     // Read here rather than by a second call from every caller. This is the one
@@ -1084,8 +1043,6 @@ export async function upsertEntry(
     place: { city: string | null; region: string | null; country: string | null };
     url: string;
     extra: Record<string, string>;
-    /** Never drop this entry to reach a page limit. See the schema. */
-    alwaysInclude?: boolean;
   },
 ): Promise<string> {
   const bullets = entry.bullets.map((b) => b.trim()).filter(Boolean);
@@ -1101,7 +1058,6 @@ export async function upsertEntry(
         endMonth: entry.dates.endMonth, endYear: entry.dates.endYear,
         isCurrent: entry.dates.isCurrent,
         extra: entry.extra,
-        alwaysInclude: entry.alwaysInclude === true,
         bullets, updatedAt: new Date(),
       })
       .where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, entry.id)))
@@ -1129,7 +1085,6 @@ export async function upsertEntry(
     endMonth: entry.dates.endMonth, endYear: entry.dates.endYear,
     isCurrent: entry.dates.isCurrent,
     extra: entry.extra,
-    alwaysInclude: entry.alwaysInclude === true,
     bullets, orderIndex: next, source: 'manual',
   });
   await markProfileStale(userId);
@@ -1356,7 +1311,6 @@ function entryValues(userId: string, row: ProfileEntryRow) {
     datesDisplay: row.datesDisplay,
     url: row.url,
     extra: row.extra,
-    alwaysInclude: row.alwaysInclude === true,
     orderIndex: row.orderIndex,
     bullets: row.bullets,
     tech: row.tech,
@@ -1369,7 +1323,7 @@ function entryValues(userId: string, row: ProfileEntryRow) {
 /** Replaces the skills block. Grouped as `Category: items`. */
 export async function saveSkillGroups(
   userId: string,
-  groups: { category: string; items: string; alwaysInclude?: boolean }[],
+  groups: { category: string; items: string }[],
 ) {
   await db.transaction(async (tx) => {
     // Every skill fact goes, not only the ones this form wrote.
@@ -1395,9 +1349,6 @@ export async function saveSkillGroups(
         id: newId('fact'), userId, entryId: null,
         category: 'skill', text: `${g.category.trim() || 'Skills'}: ${g.items.trim()}`,
         hasNumber: false, confidence: 1, source: 'manual' as const, sourceTurnId: null,
-        // Every skill row is rewritten on save, so the marking has to travel
-        // with the form or it is lost the next time anybody edits a skill.
-        alwaysInclude: g.alwaysInclude === true,
       }));
 
     if (rows.length) await tx.insert(facts).values(rows);

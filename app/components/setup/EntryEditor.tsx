@@ -36,7 +36,6 @@ export function blankEntry(kind: Kind): EditableEntry {
     place: { city: null, region: null, country: null },
     url: '',
     extra: {},
-    alwaysInclude: false,
   };
 }
 
@@ -426,32 +425,6 @@ export default function EntryEditor({
             </p>
           ) : null}
       </div>
-
-      {/*
-        * Never drop this to reach a page limit.
-        *
-        * Shown for the sections a page limit can actually reach — education is
-        * never cut, so offering it there would be a promise about nothing.
-        * The alternative to a toggle was reading it out of the person's
-        * written rules, which bound things invisibly and is gone.
-        */}
-      {kind !== 'education' ? (
-        <label className="mt-6 flex cursor-pointer items-start gap-3 rounded border border-rule-field bg-band px-4 py-3">
-          <input
-            type="checkbox"
-            checked={draft.alwaysInclude === true}
-            onChange={(e) => setDraft({ ...draft, alwaysInclude: e.target.checked })}
-            className="mt-[3px] h-[15px] w-[15px] shrink-0 accent-accent"
-          />
-          <span className="text-[12.5px] leading-[1.55] text-ink-prose">
-            <span className="font-medium text-ink">Always include this</span>
-            <span className="block text-ink-muted">
-              Tailoring may shorten it, but it will never be taken off to fit a page limit. If it
-              cannot fit, you are told instead.
-            </span>
-          </span>
-        </label>
-      ) : null}
 
       <div className="mt-8 flex items-center justify-between border-t border-rule pt-6">
         <button

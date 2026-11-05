@@ -185,35 +185,59 @@ const named = (text: string, name: string) =>
   });
 
 /**
- * What the person has marked "always include", as pins.
+ * The pins their standing rules ask for.
  *
- * Filtered against the resume being fitted, so a toggle on something that is
- * not on this resume — an entry in a section the posting does not use, a
- * skills line they have since emptied — is quietly nothing rather than a
- * promise the fitter cannot keep.
+ * Read off each rule's stored CHECK rather than off its text. A rule's
+ * meaning is read once, when it is written, by the intake that already does
+ * this for every other kind of rule — and the reading is shown on the rules
+ * page, so what the fitter will obey is visible before any resume is made.
  *
- * Takes rows rather than reading anything: the marking is a boolean somebody
- * set in the editor, and there is no text to interpret.
+ * It was a regex over the rule's prose at tailor time, which was wrong three
+ * ways at once: fragile on free text, invisible, and it turned a sentence
+ * somebody meant as guidance into a constraint they never agreed to. An
+ * ambiguous rule gets no check, shows as guidance, and binds nothing.
+ *
+ * Where a name sits is worked out here, against the resume being fitted: the
+ * rule says "Aegon" and this resume is the only thing that knows whether that
+ * is a job, a project, a skill, or not on the page at all.
  */
-export function alwaysInclude(
-  marked: { entries: { kind: string; name: string }[]; skills: string[] },
+export function pinsFromRules(
+  rules: readonly { check?: unknown }[],
   structure: ResumeStructure,
 ): Pin[] {
   const pins: Pin[] = [];
   const add = (pin: Pin) => {
-    if (!missingPins(structure, [pin]).length) pins.push(pin);
+    if (missingPins(structure, [pin]).length) return;
+    if (!pins.some((p) => p.place === pin.place && samePin(p.text, pin.text))) pins.push(pin);
   };
 
-  for (const entry of marked.entries) {
-    if (!entry.name?.trim()) continue;
-    // The editor's kinds are singular and its own; the structure has two
-    // lists. Education is never cut, so a marking on one is already true.
-    const place: PinPlace | null =
-      entry.kind === 'experience' ? 'experience' : entry.kind === 'project' || entry.kind === 'projects' ? 'projects' : null;
-    if (place) add(pinEntry(place, entry.name));
-  }
-  for (const category of marked.skills) {
-    if (category?.trim()) add({ place: 'skills', text: category, label: `the ${category} line` });
+  for (const rule of rules) {
+    const check = rule?.check as { kind?: string; names?: unknown } | null | undefined;
+    if (!check || check.kind !== 'always_include' || !Array.isArray(check.names)) continue;
+
+    for (const raw of check.names) {
+      const name = typeof raw === 'string' ? raw.trim() : '';
+      if (!name) continue;
+
+      // An employer or a project, by name. Education is never cut to reach a
+      // page limit, so a rule naming a degree is already satisfied.
+      const asJob = (structure.experience ?? []).some((e) => e.org && named(name, e.org));
+      const asProject = (structure.projects ?? []).some((p) => p.name && named(name, p.name));
+      if (asJob) add(pinEntry('experience', name));
+      if (asProject) add(pinEntry('projects', name));
+      if (asJob || asProject) continue;
+
+      // A skills line, or one tool on one.
+      for (const group of structure.skills ?? []) {
+        const category = (group.category ?? '').trim();
+        if (category && named(name, category)) add({ place: 'skills', text: category, label: `the ${category} line` });
+        for (const item of String(group.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
+          if (waysOfWriting(item).some((way) => patternFor(way).test(name))) {
+            add({ place: 'skills', text: item, label: item });
+          }
+        }
+      }
+    }
   }
   return pins;
 }
