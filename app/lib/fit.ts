@@ -305,9 +305,22 @@ function usableCuts(
    * used first. Bullets before entries, and within each, the least relevant
    * entry before the most.
    *
-   * "Least relevant" is the tailor's own ordering. It puts the strongest
-   * evidence for this posting first, so walking from the end is walking from
-   * the weakest — no second opinion needed, and no ranking of our own invented.
+   * Within a section, from the end. For BULLETS that is a relevance order: the
+   * tailor writes the strongest evidence for this posting first, so the last
+   * one is the weakest. For ENTRIES it is not — entries are printed in date
+   * order and the tailor is told to keep them that way, so the last one is the
+   * OLDEST, not the least relevant. That is the default and it is only a
+   * default: the relevance call on whole entries is the model's ranking above,
+   * and this is what runs when the ranking stops or never came.
+   *
+   * No relevance score of our own, because it was tried and measured. The same
+   * keyword scoring that picks skills lines was run over the four jobs on one
+   * real profile against eleven real postings: on the procurement posting it
+   * put the procurement job SECOND, behind a wealth-management job that
+   * happened to share "planning", "risk" and "communication" with the
+   * posting's soft-skills list. A skills line is a list of tool names and
+   * matches exactly; a bullet is prose, and prose overlap is mostly noise.
+   * Guessing worse than dropping the oldest is not an improvement.
    */
   const weakestFirst = (section: Section) => {
     const out: number[] = [];
