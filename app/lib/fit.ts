@@ -1,4 +1,5 @@
 import type { CutTarget } from './provenance';
+import { patternFor, waysOfWriting } from './requirementMatch';
 import type { ResumeStructure } from './types';
 
 /**
@@ -66,12 +67,16 @@ const MIN_BULLETS = 2;
  * however good that scoring is, it says nothing about how the page reads as a
  * whole. Relevance decides which entries go; this decides how few may be left.
  *
- * Costs almost nothing. Measured: four jobs at ten bullets each still fit on
- * one page, so a resume where only two jobs may go and that is not enough is a
- * very unusual resume. Somebody there is told it will not fit rather than
- * handed a page that makes them look unemployed.
+ * Three, raised from two after a real apply run: eleven resumes, and the
+ * fitter stopped at exactly two every time because two was what it was told.
+ * Measured on that profile, three jobs and two projects fit on one page with
+ * the skills section untouched — so two was never the page's limit, it was
+ * ours.
+ *
+ * Somebody with fewer keeps what they have: the floor stops cutting, it never
+ * invents a job.
  */
-const MIN_JOBS = 2;
+const MIN_JOBS = 3;
 
 /**
  * The fewest projects cutting may leave, on the same reasoning.
@@ -94,11 +99,40 @@ const MIN_JOBS = 2;
  */
 const MIN_PROJECTS = 2;
 
+/**
+ * The fewest skill lines trimming may leave.
+ *
+ * Three. A resume needs a skills section; it does not need eight lines of one.
+ * It is the cheapest thing on the page to lose and the fitter could not touch
+ * it — so it dropped jobs instead, on all eleven resumes of one apply run,
+ * while the same six to eight lines of comma-separated tools sat unchanged on
+ * every single output.
+ *
+ * Measured on that profile: four jobs and two projects run to two pages with
+ * five skill lines and fit on one with four. One line of tools costs a JOB.
+ */
+const MIN_SKILL_LINES = 3;
+
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
   target: number;
   /** What may go, least relevant first. */
   cuts: CutTarget[];
+  /**
+   * The posting's own words, for ranking the skills lines.
+   *
+   * The whole description, not the extracted requirement list. Scoring against
+   * the list first looked right and was wrong in a way worth remembering: one
+   * Applied AI Engineer posting extracted to python, fastapi, aws, sagemaker,
+   * eks, ecr, s3, kinesis, terraform — infrastructure names — so the AI & Data
+   * line scored ZERO and was the first thing the fitter took off an AI job.
+   *
+   * Scored the other way round too: how many of the LINE'S items this employer
+   * mentions, rather than how many of their keywords the line happens to
+   * contain. "How much of this do they care about" is the question; the
+   * reverse is a different one that only looks the same.
+   */
+  posting?: string;
   /** Compiles and counts. Null when it could not be measured at all. */
   measure: (structure: ResumeStructure) => Promise<number | null>;
   /**
@@ -142,13 +176,21 @@ const pagesWord = (n: number) => (n === 1 ? 'one page' : `${n} pages`);
 /** Letters and digits only — the same comparison the tailoring guard makes. */
 const norm = (text: string | null | undefined) => (text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-/** One cut from the ranking, already located on this resume. */
+/**
+ * One cut, already located on this resume.
+ *
+ * `skills` is the third kind and the cheapest by far. Measured on a real
+ * profile: four jobs and two projects run to two pages with five skill lines
+ * and fit on one with four. A line of comma-separated tools costs a whole JOB,
+ * and the fitter could not touch it — so it dropped the job instead, eleven
+ * times in one apply run.
+ */
 interface ResolvedCut {
-  section: Section;
+  section: Section | 'skills';
   index: number;
-  /** Null when the whole entry goes. */
+  /** Null when the whole entry — or the whole skills line — goes. */
   text: string | null;
-  /** What to call it in the log. Only on an entry. */
+  /** What to call it in the log. Only on an entry or a skills line. */
   name?: string;
 }
 
@@ -168,7 +210,11 @@ interface ResolvedCut {
  *   - the last job, always, however it was ranked;
  *   - anything naming an entry that is not there.
  */
-function usableCuts(structure: ResumeStructure, targets: CutTarget[]): { cuts: ResolvedCut[]; ranked: number } {
+function usableCuts(
+  structure: ResumeStructure,
+  targets: CutTarget[],
+  posting = '',
+): { cuts: ResolvedCut[]; ranked: number } {
   // Working copies, so the simulation can spend bullets as it goes and know
   // what each entry has left by the time a later cut asks.
   const remaining: Record<Section, string[][]> = {
@@ -281,6 +327,38 @@ function usableCuts(structure: ResumeStructure, targets: CutTarget[]): { cuts: R
   }
 
   /*
+   * Skills lines, ahead of every entry.
+   *
+   * Ordered by how little of this posting the line answers — the one relevance
+   * judgement the app can make for itself rather than asking the model for. A
+   * line naming nothing the employer asked for is the cheapest thing on the
+   * page, and a job is the dearest; the fitter was spending them the wrong way
+   * round because this was the only one it could not reach.
+   */
+  const lines = (structure.skills ?? []).map((group, i) => {
+    const items = String(group?.items ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    // The category name counts too: a line headed "AI & Data" on a posting
+    // that says AI all the way through is relevant whatever its items are.
+    const wanted = [group?.category ?? '', ...items].filter((t) => t.trim());
+    const answers = posting.trim()
+      ? wanted.filter((term) => waysOfWriting(term).some((way) => patternFor(way).test(posting))).length
+      : 0;
+    return { i, answers, name: group?.category || 'a skills line' };
+  });
+  const sheddable = lines.length - MIN_SKILL_LINES;
+  if (sheddable > 0) {
+    [...lines]
+      // Fewest answers first; ties broken by position, so the lines a person
+      // put last go before the ones they led with.
+      .sort((a, b) => a.answers - b.answers || b.i - a.i)
+      .slice(0, sheddable)
+      .forEach((line) => usable.push({ section: 'skills', index: line.i, text: null, name: line.name }));
+  }
+
+  /*
    * Then whole entries — the fuller section giving first, so the two shrink
    * together.
    *
@@ -355,8 +433,13 @@ function trim<T extends { bullets?: string[] }>(
 function applyCuts(structure: ResumeStructure, cuts: ResolvedCut[]): ResumeStructure {
   const dropped: Record<Section, Set<number>> = { experience: new Set(), projects: new Set() };
   const bullets: Record<Section, Map<number, string[]>> = { experience: new Map(), projects: new Map() };
+  const skillsGone = new Set<number>();
 
   for (const cut of cuts) {
+    if (cut.section === 'skills') {
+      skillsGone.add(cut.index);
+      continue;
+    }
     if (cut.text === null) {
       dropped[cut.section].add(cut.index);
       continue;
@@ -370,6 +453,7 @@ function applyCuts(structure: ResumeStructure, cuts: ResolvedCut[]): ResumeStruc
     ...structure,
     experience: trim(structure.experience ?? [], dropped.experience, bullets.experience),
     projects: trim(structure.projects ?? [], dropped.projects, bullets.projects),
+    skills: (structure.skills ?? []).filter((_, i) => !skillsGone.has(i)),
   };
 }
 
@@ -384,7 +468,7 @@ function describe(cuts: ResolvedCut[], target: number): string[] {
   const dropped = new Set(cuts.filter((c) => c.text === null).map((c) => `${c.section}:${c.index}`));
   const lines: string[] = [];
 
-  const named = (section: Section, noun: string) => {
+  const named = (section: Section | 'skills', noun: string) => {
     const group = cuts.filter((c) => c.text === null && c.section === section);
     if (!group.length) return;
     lines.push(
@@ -393,6 +477,7 @@ function describe(cuts: ResolvedCut[], target: number): string[] {
         .join(', ')}.`,
     );
   };
+  named('skills', 'skills line');
   named('projects', 'project');
   named('experience', 'role');
 
@@ -431,7 +516,7 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   if (pages <= opts.target) return { ...unchanged, pages };
 
   const tooLong = `This runs to ${pagesWord(pages)} and your rules ask for ${pagesWord(opts.target)}.`;
-  const { cuts, ranked } = usableCuts(structure, opts.cuts);
+  const { cuts, ranked } = usableCuts(structure, opts.cuts, opts.posting ?? '');
   if (!cuts.length) {
     return {
       ...unchanged,
@@ -508,8 +593,11 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
     warnings: [],
     // Read off the ORIGINAL structure, by the position each cut recorded, so
     // what is kept is the entry as the reader would have seen it.
+    // Entries only. A skills line is not something anybody asks to have put
+    // back by name, and the restore path splices entries into experience and
+    // projects.
     dropped: best.cuts
-      .filter((c) => c.text === null)
+      .filter((c): c is ResolvedCut & { section: Section } => c.text === null && c.section !== 'skills')
       .map((c) => ({
         section: c.section,
         index: c.index,

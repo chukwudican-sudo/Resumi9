@@ -276,6 +276,10 @@ export async function POST(_request: Request, { params }: { params: { id: string
       target: pageTarget(
         rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
       ),
+      // For ranking the skills lines. The model ranks entries; a skills line
+      // the app can score itself — by how many of its own tools this employer
+      // actually mentions, read off the posting's whole text.
+      posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
       /*
        * The model's ranking, followed to the sentences that actually survived.
        *

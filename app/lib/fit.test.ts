@@ -577,3 +577,135 @@ test('somebody with one project keeps it, and the floor invents nothing', async 
 
   assert.equal(result.structure.projects.length, 1, 'the floor stops cutting, it does not pad');
 });
+
+// ── skills lines ───────────────────────────────────────────────────────────
+//
+// Measured on a real profile: four jobs and two projects run to two pages with
+// five skill lines and fit on one with four. A line of comma-separated tools
+// costs a JOB — and the fitter could not touch it, so it dropped the job
+// instead, on all eleven resumes of one apply run.
+//
+// These need their own meter. `byLines` counts entry headings and bullets,
+// which is all the rest of this file cares about; a skills line is a line on
+// the page too, and a measurement that ignores it cannot show a skills cut
+// doing anything.
+
+const andSkills = (perPage: number) => async (structure: ResumeStructure) => {
+  const entries = [...structure.experience, ...structure.projects].reduce(
+    (n, entry) => n + 2 + (entry.bullets ?? []).length,
+    0,
+  );
+  return Math.max(1, Math.ceil((entries + (structure.skills ?? []).length) / perPage));
+};
+
+const linesOf = (categories: string[]) =>
+  categories.map((category) => ({ category, items: `${category} one, ${category} two` }));
+
+const FIVE: ResumeStructure = {
+  ...RESUME,
+  skills: [
+    { category: 'Languages', items: 'Python, TypeScript' },
+    { category: 'Frontend', items: 'React, Tailwind' },
+    { category: 'AI & Data', items: 'LLM API Integration, Prompt Engineering' },
+    { category: 'Office', items: 'Excel, PowerPoint' },
+    { category: 'Tools', items: 'Git, Docker' },
+  ],
+};
+
+/*
+ * Twenty-six lines: twenty-one of entries and five of skills. Trimming every
+ * bullet down to the floor reaches twenty, one over, so one page is only
+ * reachable if a skills line can go — which is the whole question.
+ */
+test('a skills line goes before any entry does', async () => {
+  const result = await fitToPages(FIVE, {
+    target: 1,
+    cuts: [],
+    posting: 'We are looking for a Python engineer with React experience.',
+    measure: andSkills(19),
+    affords: always,
+  });
+
+  assert.equal(result.pages, 1);
+  assert.equal(result.structure.experience.length, 2, 'both jobs stay');
+  assert.equal(result.structure.projects.length, 2, 'and both projects');
+  assert.equal((result.structure.skills ?? []).length, 4, 'a skills line gave instead');
+});
+
+test('the line the employer never mentions is the one that goes', async () => {
+  const result = await fitToPages(FIVE, {
+    target: 1,
+    cuts: [],
+    posting: 'Python, TypeScript, React, Tailwind, LLM API Integration, Prompt Engineering, Git, Docker.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  const kept = (result.structure.skills ?? []).map((g) => g.category);
+  assert.deepEqual(kept, ['Languages', 'Frontend', 'AI & Data', 'Tools'], 'Office named nothing they asked for');
+});
+
+test('a line is judged on its own items, not on a keyword list', async () => {
+  /*
+   * The mistake this replaced, caught before it shipped. One Applied AI
+   * Engineer posting extracted to python, fastapi, aws, sagemaker, eks, ecr,
+   * s3, kinesis, terraform — infrastructure names, all of them — so scoring
+   * the line against that list scored AI & Data at zero, and the fitter took
+   * the AI line off an AI job first. The posting's own words say AI twice in
+   * the first sentence.
+   */
+  const result = await fitToPages(FIVE, {
+    target: 1,
+    cuts: [],
+    posting:
+      'You will work on LLM API Integration and Prompt Engineering for our AI products. Stack: AWS, SageMaker, Terraform.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.ok(
+    (result.structure.skills ?? []).some((g) => g.category === 'AI & Data'),
+    `the AI line survives an AI posting; kept ${(result.structure.skills ?? []).map((g) => g.category).join(', ')}`,
+  );
+});
+
+test('skills never fall below three lines', async () => {
+  // Eight lines, twenty-nine lines in all. Eighteen is every bullet and every
+  // sheddable skills line exactly — so the floor is what stops it, not the fit.
+  const eight: ResumeStructure = { ...RESUME, skills: linesOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) };
+  const result = await fitToPages(eight, {
+    target: 1,
+    cuts: [],
+    posting: 'Nothing here matches anything on the resume.',
+    measure: andSkills(18),
+    affords: always,
+  });
+
+  assert.equal(result.pages, 1);
+  assert.equal((result.structure.skills ?? []).length, 3, 'five went, three stayed');
+  assert.equal(result.structure.experience.length, 2, 'and no entry was touched');
+});
+
+test('a resume already at three skills lines keeps all three', async () => {
+  const lean: ResumeStructure = { ...RESUME, skills: linesOf(['a', 'b', 'c']) };
+  const result = await fitToPages(lean, {
+    target: 1,
+    cuts: [],
+    posting: 'Nothing matches.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.equal((result.structure.skills ?? []).length, 3, 'the floor stops cutting, it does not pad');
+});
+
+test('dropped skills lines are named in the log', async () => {
+  const result = await fitToPages(FIVE, {
+    target: 1,
+    cuts: [],
+    posting: 'Python and React only.',
+    measure: andSkills(19),
+    affords: always,
+  });
+  assert.ok(
+    result.log.some((l) => /skills line/.test(l) && /Office|Tools/.test(l)),
+    `log was ${JSON.stringify(result.log)}`,
+  );
+});
