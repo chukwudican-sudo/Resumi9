@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readInstruction } from './asked';
-import { applyFlags, checkBullets } from './honesty';
+import { applyFlags, checkBullets, toldByThePerson } from './honesty';
 import type { ResolvedBullet } from './provenance';
 import type { ResumeStructure } from './types';
 
@@ -398,4 +398,90 @@ test('an edit says the previous version, never your profile', () => {
 test('a tailor still says your profile', () => {
   const flags = checkBullets([bullet({ text: 'Ran the department', unsourced: true })], []);
   assert.match(flags[0].reason, /your profile/);
+});
+
+// ── the answer to the app's own question ───────────────────────────────────
+//
+// From the Nov 4 apply run, verbatim. The app asked what the Resumi project
+// should say; the person answered "schema-constrained output, hallucination
+// guards, mock-mode test harness"; the model wrote two bullets from exactly
+// that; and this check deleted both, because the project had been dropped
+// earlier so neither bullet had a source bullet behind it. The resume saved
+// with "Resumi" printed over nothing.
+
+test('a bullet made of the person’s own answer is theirs, not an invention', () => {
+  const answer =
+    'Add the Resumi project back with 2 bullets on validating LLM output: schema-constrained output, hallucination guards, and a mock-mode test harness.';
+  assert.equal(
+    toldByThePerson('Used schema-constrained output and hallucination guards to validate every LLM response', answer),
+    true,
+  );
+});
+
+test('a gloss on top of their words is still not their words', () => {
+  /*
+   * The second bullet from that same run, and it does NOT pass: "Built a
+   * mock-mode test harness to validate LLM output without live calls" is six
+   * ninths his, because "without live calls" is the model explaining what
+   * mock-mode means rather than something he said.
+   *
+   * Left failing on purpose. Two thirds would pass it and the threshold is a
+   * judgement either way, so it is set where an invention cannot ride in on a
+   * long instruction — and the entry no longer disappears when a bullet is
+   * refused, because an emptied entry is now taken off rather than printed as
+   * a bare heading. One surviving bullet keeps the project.
+   */
+  const answer =
+    'Add the Resumi project back with 2 bullets on validating LLM output: schema-constrained output, hallucination guards, and a mock-mode test harness.';
+  assert.equal(
+    toldByThePerson('Built a mock-mode test harness to validate LLM output without live calls', answer),
+    false,
+  );
+});
+
+test('a bullet riding alongside an unrelated instruction is still an invention', () => {
+  const answer = 'Make the FraudWatch bullets shorter.';
+  assert.equal(
+    toldByThePerson('Partnered with stakeholders across the organisation to drive alignment', answer),
+    false,
+  );
+});
+
+test('half somebody’s words is half invented', () => {
+  // Deliberately strict: three quarters, not a majority.
+  assert.equal(toldByThePerson('Used schema-constrained output and Kubernetes autoscaling on AWS Lambda', 'schema-constrained output'), false);
+});
+
+test('no instruction at all means nothing is excused', () => {
+  assert.equal(toldByThePerson('Used schema-constrained output', ''), false);
+});
+
+test('a bullet of two words proves nothing either way', () => {
+  assert.equal(toldByThePerson('Shipped features', 'shipped features for the team'), false);
+});
+
+// ── a heading over nothing ─────────────────────────────────────────────────
+
+test('an entry this pass empties is taken off, not printed as a bare heading', () => {
+  const structure = {
+    experience: [{ org: 'Droady', bullets: ['a real one'] }],
+    projects: [{ name: 'Resumi', bullets: ['invented one', 'invented two'] }],
+  };
+  const { structure: out, log } = applyFlags(structure as never, [
+    { text: 'invented one', revertTo: '', reason: 'is not based on anything in your profile' },
+    { text: 'invented two', revertTo: '', reason: 'is not based on anything in your profile' },
+  ]);
+
+  assert.deepEqual((out as any).projects, [], 'the heading goes with its last bullet');
+  assert.equal((out as any).experience.length, 1, 'and nothing else is touched');
+  assert.ok(log.some((l) => /Resumi had nothing left under it/.test(l)), `log was ${JSON.stringify(log)}`);
+});
+
+test('an entry that keeps one bullet keeps its heading', () => {
+  const structure = { projects: [{ name: 'Resumi', bullets: ['a real one', 'invented'] }] };
+  const { structure: out } = applyFlags(structure as never, [
+    { text: 'invented', revertTo: '', reason: 'is not based on anything in your profile' },
+  ]);
+  assert.equal((out as any).projects.length, 1);
+  assert.deepEqual((out as any).projects[0].bullets, ['a real one']);
 });

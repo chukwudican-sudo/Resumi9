@@ -143,6 +143,81 @@ const said = (haystack: string, term: string, scattered = false): boolean =>
   });
 
 /**
+ * Words too common to tell us anything about where a sentence came from.
+ *
+ * Wider than FILLER, which exists for matching a phrase. This one decides
+ * whether a bullet is ABOUT what somebody told us, and for that the verbs and
+ * connectives a resume uses everywhere have to be set aside, or every sentence
+ * looks like every other.
+ */
+const COMMON = new Set([
+  ...['and','or','of','the','a','an','in','on','for','with','to','by','at','as','from','into','that','this','it','its','their','our','my','is','are','was','were','be','been','using','used','use','via','per','across','through','over','under','not','no','but','so','than','then','when','while','after','before','out','up','down','off','about','every','all','each','more','most','new','own'],
+  ...['built','build','building','made','make','created','create','developed','develop','designed','design','added','add','wrote','write','set','ran','run','worked','work','helped','help','led','lead','shipped','ship','delivered','deliver','implemented','implement','improved','improve','reduced','cut','increased','raised'],
+  ...['project','projects','feature','features','app','application','system','systems','team','teams','code','data','user','users','time','work'],
+]);
+
+/**
+ * A word reduced to its root, crudely.
+ *
+ * Only enough to see that "validating" and "validate" are the same word.
+ * Without it a bullet written from somebody's own sentence reads as two
+ * thirds theirs instead of five sixths, and the test below fails them for
+ * having conjugated a verb differently.
+ */
+const stem = (word: string): string =>
+  word
+    .replace(/(?<=.{4})ing$/, '')
+    .replace(/(?<=.{4})ed$/, '')
+    .replace(/(?<=.{4})e$/, '')
+    .replace(/(?<=.{3})s$/, '');
+
+/** The words in a sentence that actually say what it is about, stemmed. */
+const contentWords = (text: string): string[] => {
+  const seen = new Set<string>();
+  for (const raw of (text ?? '').toLowerCase().match(/[a-z0-9][a-z0-9+#.-]*/g) ?? []) {
+    const word = raw.replace(/^[.-]+|[.-]+$/g, '');
+    if (word.length < 3 || COMMON.has(word)) continue;
+    seen.add(stem(word));
+  }
+  return [...seen];
+};
+
+/**
+ * Whether a bullet is saying back what the person themselves just told us.
+ *
+ * The case this exists for, from a real run: the app asked what the Resumi
+ * project should say, the person answered "schema-constrained output,
+ * hallucination guards, mock-mode test harness", the model wrote two bullets
+ * from exactly that — and the check deleted both, because the entry had been
+ * dropped earlier so neither bullet had a source bullet behind it. The entry
+ * saved as a heading with nothing under it, and the facts the app had just
+ * ASKED FOR were the ones it threw away.
+ *
+ * `evidence` widening does not cover this: the unsourced test deliberately
+ * reads the source bullets alone, so that an instruction in the room cannot
+ * launder a bullet that came from nowhere. That rule is right and stays. This
+ * is narrower — not "an instruction exists" but "this sentence is made of the
+ * words they typed". Most of what it is about has to appear in their own text,
+ * which an invented bullet written alongside an unrelated instruction cannot
+ * manage.
+ *
+ * Three quarters, and that number is a judgement rather than a finding. Two
+ * thirds would admit one more real bullet from the run above and would also
+ * let an invention ride in on a long instruction. Set strict, because the
+ * cost of refusing a good bullet is now small: an entry emptied by this check
+ * is taken off rather than printed as a heading over nothing, so a refused
+ * bullet no longer takes somebody's project off the page with it.
+ */
+export function toldByThePerson(text: string, words: string): boolean {
+  if (!words.trim()) return false;
+  const inBullet = contentWords(text);
+  if (inBullet.length < 3) return false;
+  const theirs = new Set(contentWords(words));
+  const matched = inBullet.filter((w) => theirs.has(w)).length;
+  return matched / inBullet.length >= 0.75;
+}
+
+/**
  * Checks one pass of tailoring, and says what to put back.
  *
  * `requirements` are the posting's own extracted terms. A requirement appearing
@@ -195,8 +270,13 @@ export function checkBullets(
      * happens to it and what the person is told.
      */
     if (bullet.unsourced || !source.trim()) {
-      flags.push({ text: bullet.text, revertTo: '', reason: `is not based on anything in ${sourceLabel}` });
-      continue;
+      // Unless they told us. See toldByThePerson: the app asked for these
+      // facts, and deleting the answer to its own question is how an entry
+      // ended up on somebody's resume as a heading with nothing under it.
+      if (!toldByThePerson(bullet.text, asked.words)) {
+        flags.push({ text: bullet.text, revertTo: '', reason: `is not based on anything in ${sourceLabel}` });
+        continue;
+      }
     }
 
     // A fact carried in from another entry. The project folded into the job of
@@ -263,18 +343,39 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
   const byText = new Map(flags.map((f) => [f.text, f]));
   const fixed: any = { ...structure };
 
+  /*
+   * Emptied entries are taken off, never left as a heading.
+   *
+   * A real run: the Resumi project was restored on request, the model wrote
+   * two bullets for it, this check deleted both, and the resume saved with
+   * "Resumi" printed over nothing. A heading with no lines under it is worse
+   * than the entry being absent — it reads as a mistake to anybody holding the
+   * page, and it is one.
+   *
+   * Every entry left with nothing goes, however it got that way — but only the
+   * ones THIS pass emptied are named in the log, because those are the ones
+   * the person is owed an explanation for.
+   */
+  const emptied: string[] = [];
+
   for (const kind of ['experience', 'projects', 'education'] as const) {
     if (!Array.isArray(fixed[kind])) continue;
-    fixed[kind] = fixed[kind].map((entry: any) => ({
-      ...entry,
-      bullets: (entry.bullets ?? [])
-        .map((text: string) => {
-          const flag = byText.get(text);
-          if (!flag) return text;
-          return flag.revertTo;
-        })
-        .filter((text: string) => text.trim()),
-    }));
+    fixed[kind] = fixed[kind]
+      .map((entry: any) => {
+        const before = (entry.bullets ?? []).length;
+        const bullets = (entry.bullets ?? [])
+          .map((text: string) => {
+            const flag = byText.get(text);
+            if (!flag) return text;
+            return flag.revertTo;
+          })
+          .filter((text: string) => text.trim());
+        if (before > 0 && bullets.length === 0) {
+          emptied.push(entry.org || entry.name || entry.school || entry.title || 'an entry');
+        }
+        return { ...entry, bullets };
+      })
+      .filter((entry: any) => (entry.bullets ?? []).length > 0);
   }
 
   const reverted = flags.filter((f) => f.revertTo).length;
@@ -282,6 +383,11 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
   const log: string[] = [];
   if (reverted) log.push(`Put ${reverted} ${reverted === 1 ? 'bullet' : 'bullets'} back in your own words — the rewrite had added something your profile does not say.`);
   if (removed) log.push(`Removed ${removed} ${removed === 1 ? 'bullet' : 'bullets'} that ${removed === 1 ? 'was' : 'were'} not based on anything in ${sourceLabel}.`);
+  if (emptied.length) {
+    log.push(
+      `${emptied.join(', ')} had nothing left under ${emptied.length === 1 ? 'it' : 'them'} afterwards, so ${emptied.length === 1 ? 'it was' : 'they were'} taken off rather than printed as a heading over nothing.`,
+    );
+  }
 
   return {
     structure: fixed,
