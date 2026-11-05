@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { CapacityError } from '../../server/limits';
+import { outOfCredit } from '../../lib/anthropic';
 import type { ApiErrorPayload } from '../../lib/types';
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -21,6 +22,25 @@ export const SERVICE_UNAVAILABLE = 'The AI service is temporarily unavailable. P
  * a limit you can read off a response is a limit you can probe.
  */
 export function capacityResponse(error: unknown) {
+  /*
+   * Out of money reads as out of capacity, which is what it is to a user.
+   *
+   * The app's own Anthropic account, not theirs — so the sentence says the
+   * thing that is true and useful to them, and does not send them to a
+   * billing page belonging to somebody else. Handled here rather than in each
+   * route, because every route already asks this question first.
+   */
+  if (outOfCredit(error)) {
+    return errorResponse(
+      {
+        type: 'generic',
+        message:
+          'Resumi9 is out of capacity right now. This is on us, not you — nothing was charged, and it will be back shortly.',
+        creditKept: true,
+      },
+      429,
+    );
+  }
   if (!(error instanceof CapacityError)) return null;
   return errorResponse({ type: 'generic', message: error.userMessage }, 429);
 }

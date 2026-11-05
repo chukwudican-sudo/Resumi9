@@ -190,17 +190,46 @@ export function withScheme(url: string): string {
   return /^https?:\/\//i.test(url) ? url : `https://${url}`;
 }
 
+/**
+ * A link in the header, spelled out.
+ *
+ * The header said "LinkedIn" and "GitHub", which reads well and loses the
+ * thing somebody wants from a printed resume: which account. Two people with
+ * the same name are told apart by the handle, and an ATS that parses a resume
+ * to text keeps what it can read — a label is a word, a URL is an address.
+ *
+ * The scheme and the www go, because they are noise on a page nobody retypes
+ * a protocol from, and a trailing slash goes with them.
+ */
+export function linkText(url: string): string {
+  return url
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '')
+    .replace(/\/+$/, '');
+}
+
 // Heading contact line: joins present fields with ` $|$ `. Emails/links are
 // wrapped in \href{...}{\underline{...}} like the Jake Gutierrez template.
 function renderContact(c: ResumeStructure['contact']): string {
   const parts: string[] = [];
   if (c.phone) parts.push(escapeLatex(c.phone));
-  if (c.email) parts.push(`\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}`);
-  // Labelled, not spelled out. A resume header says "LinkedIn", not
-  // "https://linkedin.com/in/chukwudi-ndubuisi-1a2b3c" — the long form eats the
-  // line and is useless on paper, where nobody retypes it.
+  if (c.email) parts.push(`\\mbox{\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}}`);
+  /*
+   * Spelled out, and each one unbreakable.
+   *
+   * \mbox is the whole point of writing this out rather than reusing the entry
+   * form: a URL is full of hyphens and slashes, every one of which LaTeX will
+   * happily break a line at, and "linkedin.com/in/chukwudi-" at the end of one
+   * line is worse than a label would have been. The separators between links
+   * stay breakable, so a header too long for one line wraps between addresses
+   * instead of inside one.
+   */
   for (const link of [c.linkedin, c.github, c.website]) {
-    if (link) parts.push(`\\href{${escapeLatex(withScheme(link))}}{\\underline{${escapeLatex(linkLabel(link))}}}`);
+    if (link) {
+      parts.push(
+        `\\mbox{\\href{${escapeLatex(withScheme(link))}}{\\underline{${escapeLatex(linkText(link))}}}}`,
+      );
+    }
   }
   return parts.join(' $|$ ');
 }

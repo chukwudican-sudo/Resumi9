@@ -127,6 +127,28 @@ const BUSY = new Set([429, 500, 502, 503, 529]);
  * 0` exists to prevent. A connection error that never reached them is worth
  * one more go; a 400 never is.
  */
+/**
+ * The account behind the app has run out of money.
+ *
+ * It arrives as a plain 400 — `invalid_request_error`, "Your credit balance is
+ * too low to access the Anthropic API" — which is indistinguishable, to every
+ * `catch` in the app, from a malformed request. So a run that failed for a
+ * billing reason reported itself as "something went wrong", and the operator
+ * found out from a user rather than from the failure.
+ *
+ * Matched on the message because there is no code for it. Narrow on purpose: a
+ * 400 is also what a genuinely bad request looks like, and reading one as an
+ * outage would hide a real bug behind a reassuring sentence.
+ *
+ * It is never the person's own credit. Theirs is refunded by the route before
+ * this is read, and the message says so rather than pointing them at a billing
+ * page they do not own.
+ */
+export function outOfCredit(err: unknown): boolean {
+  if (!(err instanceof Anthropic.APIError) || err.status !== 400) return false;
+  return /credit balance is too low/i.test(String((err as { message?: unknown }).message ?? ''));
+}
+
 export function serviceIsBusy(err: unknown): boolean {
   if (err instanceof Anthropic.APIUserAbortError) return false;
   if (err instanceof Anthropic.APIConnectionTimeoutError) return false;

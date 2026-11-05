@@ -2,18 +2,7 @@ import assert from 'node:assert';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
-import {
-  CALL_CONFIG,
-  DEADLINE_GOVERNED,
-  MAX_DURATION_S,
-  NoToolUseError,
-  REQUEST_BUDGET_MS,
-  TruncatedError,
-  pauseBefore,
-  readToolUse,
-  serviceIsBusy,
-  type UsageKind,
-} from './anthropic';
+import { CALL_CONFIG, DEADLINE_GOVERNED, MAX_DURATION_S, NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, outOfCredit, pauseBefore, readToolUse, serviceIsBusy, type UsageKind } from './anthropic';
 import { estimateCostUsd } from './pricing';
 
 /**
@@ -206,4 +195,39 @@ test('a plain-object header is read too', () => {
   // Older SDK shapes hand back an object rather than a Headers instance.
   assert.equal(pauseBefore({ headers: { 'retry-after': '2' } }), 2_000);
   assert.equal(pauseBefore({ headers: { 'Retry-After': '2' } }), 2_000);
+});
+
+// ── the account behind the app running out of money ────────────────────────
+//
+// It arrives as a plain 400 with no code of its own, so every catch in the app
+// read it as a malformed request: one real run reported "something went wrong"
+// when the bill had simply not been paid.
+
+const apiError = (status: number, message: string) =>
+  new Anthropic.APIError(status, { type: 'error', error: { type: 'invalid_request_error', message } }, message, undefined);
+
+test('a credit-balance 400 is recognised', () => {
+  assert.equal(
+    outOfCredit(apiError(400, 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing')),
+    true,
+  );
+});
+
+test('an ordinary bad request is not', () => {
+  // A 400 is also what a real bug looks like, and reading one as an outage
+  // would hide it behind a reassuring sentence.
+  assert.equal(outOfCredit(apiError(400, 'tool_choice: type "tool" is not supported for this model.')), false);
+  assert.equal(outOfCredit(apiError(400, 'messages.0: all messages must have non-empty content')), false);
+});
+
+test('nor is anything else', () => {
+  assert.equal(outOfCredit(apiError(429, 'rate_limit_error')), false);
+  assert.equal(outOfCredit(apiError(529, 'overloaded_error')), false);
+  assert.equal(outOfCredit(new Error('Your credit balance is too low')), false);
+  assert.equal(outOfCredit(null), false);
+});
+
+test('being out of credit is not the service being busy', () => {
+  // Retrying would spend the budget on a request that cannot succeed.
+  assert.equal(serviceIsBusy(apiError(400, 'Your credit balance is too low')), false);
 });

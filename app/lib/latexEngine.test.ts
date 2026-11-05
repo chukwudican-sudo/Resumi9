@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { escapeLatex, renderResumeLatex } from './latexEngine';
+import { escapeLatex, linkText, renderResumeLatex } from './latexEngine';
 import { ResumeStructure } from './types';
 
 // Fixture packed with LaTeX specials: R&D, 100%, C++, a_b, and a raw backslash.
@@ -201,7 +201,61 @@ function run() {
     'the f-ligatures must stay off, or "officer" stops matching "officer"',
   );
 
+  // ── the header's links ───────────────────────────────────────────────────
+  //
+  // It said "LinkedIn" and "GitHub", which reads well and loses the thing
+  // somebody wants from a printed resume: which account. Two people with the
+  // same name are told apart by the handle, and a parser keeps an address
+  // where it can only keep a word.
+  const header = renderResumeLatex({
+    ...fixture,
+    contact: {
+      phone: '905-922-5891',
+      email: 'a@example.com',
+      linkedin: 'linkedin.com/in/chukwudi-ndubuisi',
+      github: 'github.com/chukwudican-sudo',
+      website: 'https://www.meetalexius.com/',
+    },
+  });
+  assert.match(header, /linkedin\.com\/in\/chukwudi-ndubuisi/);
+  assert.match(header, /github\.com\/chukwudican-sudo/);
+  assert.ok(!/\{LinkedIn\}|\{GitHub\}/.test(header), 'the label is gone from the header');
+  // Still a link, and still with a scheme — without one it is relative and dead.
+  assert.match(header, /\\href\{https:\/\/linkedin\.com\/in\/chukwudi-ndubuisi\}/);
+
+  // The scheme, the www and a trailing slash are noise on a printed page.
+  assert.strictEqual(linkText('https://www.linkedin.com/in/someone/'), 'linkedin.com/in/someone');
+  assert.strictEqual(linkText('http://meetalexius.com'), 'meetalexius.com');
+  assert.strictEqual(linkText('github.com/x'), 'github.com/x');
+
+  /*
+   * Each address unbreakable, every separator still a breakpoint.
+   *
+   * A URL is full of hyphens and slashes and LaTeX will break a line at any
+   * of them: "linkedin.com/in/chukwudi-" ending a line is worse than the
+   * label was. Compiled against this real contact line, the header wraps
+   * between addresses and all three print whole.
+   */
+  const contactLine = header.split('\n').find((l) => l.includes('linkedin.com'))!;
+  assert.strictEqual(
+    (contactLine.match(/\\mbox\{/g) ?? []).length,
+    4,
+    'the email and all three links are boxed',
+  );
+  assert.match(contactLine, /\} \$\|\$ \\mbox/, 'and the separator between them stays a breakpoint');
+
+  // Only the header changed. A project line has no room to spell a repo out,
+  // and "GitHub" beside a project name is unambiguous.
+  assert.match(
+    renderResumeLatex({
+      ...fixture,
+      projects: [{ name: 'FraudWatch', tech: 'Java', dates: 'Aug 2026', bullets: ['one'], url: 'github.com/x/fraudwatch' }],
+    }),
+    /\{\\underline\{GitHub\}\}/,
+  );
+
   console.log('latexEngine.test.ts: all assertions passed');
 }
 
 run();
+
