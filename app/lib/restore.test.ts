@@ -156,3 +156,45 @@ test('the change log says what came back', () => {
     'Put Droady and Aegon back, as they were before the page limit took them off.',
   );
 });
+
+// ── the sentence the bug report asks for ───────────────────────────────────
+//
+// "add Aegon back as a third job" was failing the nothing-else test on "as",
+// "third" and "job", so it went to the model: a call, a wait, and a whole
+// resume rewritten, for an instruction the app can carry out by copying one
+// kept entry. The acceptance test for the revision flow types this exactly.
+
+test('add X back as a third job is arithmetic, not a model call', () => {
+  const read = readRestore('add Aegon back as a third job', DROPPED);
+  assert.ok(read && 'restore' in read);
+  assert.equal(read.restore.only, true);
+  assert.deepEqual(read.restore.entries.map((e) => e.name), ['Aegon']);
+});
+
+test('the ways people word the same request', () => {
+  for (const said of [
+    'put the Aegon job back',
+    'bring back Aegon as a third role',
+    'add the Aegon experience back',
+    'restore Aegon as my second position',
+  ]) {
+    const read = readRestore(said, DROPPED);
+    assert.ok(read && 'restore' in read && read.restore.only, said);
+  }
+});
+
+test('a placement request still reaches the model', () => {
+  // "as a third job" describes the result; "at the top" asks for an
+  // arrangement, and a restore does not arrange. Swallowing it would ignore
+  // the half of the sentence the person cares most about.
+  for (const said of ['add Aegon back at the top', 'put Aegon back above Droady']) {
+    const read = readRestore(said, DROPPED);
+    assert.ok(read && 'restore' in read && !read.restore.only, said);
+  }
+});
+
+test('anything else in the sentence still reaches the model', () => {
+  const read = readRestore('add Aegon back and shorten the Droady bullets', DROPPED);
+  assert.ok(read && 'restore' in read);
+  assert.equal(read.restore.only, false);
+});

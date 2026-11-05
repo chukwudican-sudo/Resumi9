@@ -34,9 +34,24 @@ const THE_JOBS = /\b(?:jobs?|roles?|experiences?|positions?|work\s+history)\b/i;
 const THE_PROJECTS = /\b(?:projects?)\b/i;
 const PRONOUN = /\b(?:it|them|those|these|that|the\s+ones?)\b/i;
 
-/** Words that can be left over without meaning something else was asked for. */
+/**
+ * Words that can be left over without meaning something else was asked for.
+ *
+ * The second group is what an entry gets called and where in a list it sits.
+ * "add Aegon back as a third job" was failing this test on "as", "third" and
+ * "job", so the sentence went to the model — a call, a wait, and a rewrite of
+ * a resume, for an instruction the app can carry out by copying one entry
+ * from what it kept. It is also the exact sentence the bug report asks to be
+ * able to type.
+ *
+ * Deliberately NOT here: top, bottom, above, below, first in the sense of
+ * placement. Those ask for an arrangement, which a restore does not do — and
+ * swallowing them would silently ignore the half of the sentence the person
+ * cares most about. "as a third job" is a description of the result; "at the
+ * top" is a request.
+ */
 const FILLER =
-  /\b(?:please|pls|can|could|would|you|i|my|me|the|a|an|to|and|also|just|now|ok|okay|thanks|thank|want|need|like|add|put|bring|restore|reinstate|return|back|again|onto|on|in|into|resume|page|it|them|those|these|that|ones?|all|everything)\b/gi;
+  /\b(?:please|pls|can|could|would|you|i|my|me|the|a|an|to|and|also|just|now|ok|okay|thanks|thank|want|need|like|add|put|bring|restore|reinstate|return|back|again|onto|on|in|into|resume|page|it|them|those|these|that|ones?|all|everything)\b|\b(?:as|second|third|fourth|fifth|jobs?|roles?|positions?|entr(?:y|ies)|experiences?|projects?|sections?)\b/gi;
 
 function nothingElse(text: string, names: string[]): boolean {
   let rest = text;
