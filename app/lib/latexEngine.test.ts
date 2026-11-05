@@ -203,10 +203,10 @@ function run() {
 
   // ── the header's links ───────────────────────────────────────────────────
   //
-  // It said "LinkedIn" and "GitHub", which reads well and loses the thing
-  // somebody wants from a printed resume: which account. Two people with the
-  // same name are told apart by the handle, and a parser keeps an address
-  // where it can only keep a word.
+  // Spelled out, the two profile addresses took a whole line and most of its
+  // width. These resumes are submitted online, where a link is clicked and
+  // never retyped off a page, so the printed text went back to a label and
+  // the address stayed where it is actually used: in the link underneath.
   const header = renderResumeLatex({
     ...fixture,
     contact: {
@@ -217,11 +217,16 @@ function run() {
       website: 'https://www.meetalexius.com/',
     },
   });
-  assert.match(header, /linkedin\.com\/in\/chukwudi-ndubuisi/);
-  assert.match(header, /github\.com\/chukwudican-sudo/);
-  assert.ok(!/\{LinkedIn\}|\{GitHub\}/.test(header), 'the label is gone from the header');
-  // Still a link, and still with a scheme — without one it is relative and dead.
+  assert.match(header, /\{\\underline\{LinkedIn\}\}/);
+  assert.match(header, /\{\\underline\{GitHub\}\}/);
+  // The website is the exception, because its label would be its host: there
+  // is nothing to shorten, so it stays spelled out.
+  assert.match(header, /\{\\underline\{meetalexius\.com\}\}/);
+
+  // Short text, whole address. The label is what prints; the href is what a
+  // click follows, and without a scheme it is relative and dead.
   assert.match(header, /\\href\{https:\/\/linkedin\.com\/in\/chukwudi-ndubuisi\}/);
+  assert.match(header, /\\href\{https:\/\/github\.com\/chukwudican-sudo\}/);
 
   // The scheme, the www and a trailing slash are noise on a printed page.
   assert.strictEqual(linkText('https://www.linkedin.com/in/someone/'), 'linkedin.com/in/someone');
@@ -252,14 +257,14 @@ function run() {
    * happened to be. Compiled, this reads:
    *
    *   905-922-5891 | chukwudi.can@gmail.com | meetalexius.com
-   *   linkedin.com/in/chukwudi-ndubuisi | github.com/chukwudican-sudo
+   *   LinkedIn | GitHub
    */
   const [reach, profiles] = contactLine.split(/\s\\\\\s/);
   assert.match(reach, /905-922-5891/);
   assert.match(reach, /meetalexius\.com/);
-  assert.ok(!/linkedin|github/.test(reach), 'the profiles are not on the first line');
-  assert.match(profiles, /linkedin\.com/);
-  assert.match(profiles, /github\.com/);
+  assert.ok(!/linkedin|github/i.test(reach), 'the profiles are not on the first line');
+  assert.match(profiles, /\{\\underline\{LinkedIn\}\}/);
+  assert.match(profiles, /\{\\underline\{GitHub\}\}/);
 
   // Either line can be empty, and neither prints a separator it does not need.
   const sparse = renderResumeLatex({ ...fixture, contact: { phone: '905-922-5891' } });
@@ -271,8 +276,7 @@ function run() {
   const githubOnly = noPhone.split('\n').find((l) => l.includes('github.com/x'))!;
   assert.ok(!githubOnly.includes('\\\\'), 'nor an empty first line for somebody with only a profile');
 
-  // Only the header changed. A project line has no room to spell a repo out,
-  // and "GitHub" beside a project name is unambiguous.
+  // A project line is labelled for the same reason, and always was.
   assert.match(
     renderResumeLatex({
       ...fixture,

@@ -193,10 +193,10 @@ export function withScheme(url: string): string {
 /**
  * A link in the header, spelled out.
  *
- * The header said "LinkedIn" and "GitHub", which reads well and loses the
- * thing somebody wants from a printed resume: which account. Two people with
- * the same name are told apart by the handle, and an ATS that parses a resume
- * to text keeps what it can read — a label is a word, a URL is an address.
+ * Kept for the website, whose label IS its host, and exported because the
+ * tests read it. The profile links went back to short labels: these resumes
+ * are submitted online, where the link is clicked rather than retyped, and a
+ * spelled-out handle costs a line of the scarcest thing on a one-page resume.
  *
  * The scheme and the www go, because they are noise on a page nobody retypes
  * a protocol from, and a trailing slash goes with them.
@@ -229,16 +229,28 @@ export function linkText(url: string): string {
  * between addresses rather than inside one.
  */
 function renderContact(c: ResumeStructure['contact']): string {
-  const link = (url: string) =>
-    `\\mbox{\\href{${escapeLatex(withScheme(url))}}{\\underline{${escapeLatex(linkText(url))}}}}`;
+  const link = (url: string, shown: (url: string) => string) =>
+    `\\mbox{\\href{${escapeLatex(withScheme(url))}}{\\underline{${escapeLatex(shown(url))}}}}`;
 
   const reach = [
     c.phone ? escapeLatex(c.phone) : '',
     c.email ? `\\mbox{\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}}` : '',
-    c.website ? link(c.website) : '',
+    // The website's own label is its host, so it is already as short as it gets.
+    c.website ? link(c.website, linkText) : '',
   ].filter(Boolean);
 
-  const profiles = [c.linkedin ? link(c.linkedin) : '', c.github ? link(c.github) : ''].filter(Boolean);
+  /*
+   * Labelled, not spelled out.
+   *
+   * These resumes are submitted online: the link is clicked, never retyped
+   * off paper, so the handle buys nothing and costs horizontal space on the
+   * scarcest page in the app. The address is still in the PDF — four working
+   * link annotations, verified — it is only the printed text that is short.
+   */
+  const profiles = [
+    c.linkedin ? link(c.linkedin, linkLabel) : '',
+    c.github ? link(c.github, linkLabel) : '',
+  ].filter(Boolean);
 
   return [reach.join(' $|$ '), profiles.join(' $|$ ')].filter(Boolean).join(' \\\\ ');
 }
