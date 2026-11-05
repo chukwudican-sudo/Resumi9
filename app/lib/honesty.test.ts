@@ -485,3 +485,182 @@ test('an entry that keeps one bullet keeps its heading', () => {
   assert.equal((out as any).projects.length, 1);
   assert.deepEqual((out as any).projects[0].bullets, ['a real one']);
 });
+
+// ── the posting's words, where the source has nothing ──────────────────────
+//
+// Eleven of these were found in the Nov 4 apply run. Every bullet below is
+// verbatim from a generated PDF, next to the profile bullet it was written
+// from and the phrase of the posting it reached for. The report's own rule
+// was a two-word phrase shared with the posting; measured over all 139
+// bullets of that run it reads six of the eleven, and the five it misses are
+// claims built from words the source already contains.
+
+/** Verbatim from the two Plusgrade postings of that run. */
+const DATA_SCIENCE_POSTING =
+  'Write clean Python and SQL on AWS, track pipeline health and data quality, flag performance anomalies before they reach partners.';
+const APPLIED_AI_POSTING =
+  'Write clean, low-latency Python services with FastAPI, configure AWS cloud infrastructure, build pipelines and ' +
+  'caching layers to keep response times fast under strict SLAs. Requirements: solid grasp of model inference logic, ' +
+  'input/output contracts, and latency constraints; strong testing practices with thorough unit and integration ' +
+  'tests on every pull request.';
+
+test('a purpose clause lifted from the posting is caught', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Cut transient-failure recovery time from 30–45 seconds to 1–2 seconds by redesigning an offline-sync retry scheduler to flag anomalies and fire against the next real retry time instead of a fixed interval',
+        evidence: ['Cut transient-failure recovery time from 30–45 seconds to 1–2 seconds by redesigning an offline-sync retry scheduler to fire against the next real retry time instead of a fixed interval'],
+      }),
+    ],
+    [],
+    undefined,
+    undefined,
+    DATA_SCIENCE_POSTING,
+  );
+  assert.equal(flags.length, 1, 'the scheduler retries failed syncs; it does not flag anomalies');
+  assert.match(flags[0].reason, /from the posting/);
+});
+
+test('a condition nobody recorded is caught', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Redesigned an offline-sync retry scheduler to fire against the next real retry time instead of a fixed interval, under tight latency constraints',
+        evidence: ['Redesigned an offline-sync retry scheduler to fire against the next real retry time instead of a fixed interval'],
+      }),
+    ],
+    [],
+    undefined,
+    undefined,
+    APPLIED_AI_POSTING,
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /latency/);
+});
+
+test('an evaluation that was never done that way is caught', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Built and evaluated three rule-based detection algorithms to flag anomalous activity against baseline behaviour',
+        evidence: ['Built three rule-based detection algorithms to flag anomalous activity in a continuous data stream'],
+      }),
+    ],
+    [],
+    undefined,
+    undefined,
+    'You will train models and evaluate quality against baseline models.',
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /baselin/);
+});
+
+test('a board that tracked sprint tasks is not a defect tracker', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Ran a two-week Agile sprint with a shared GitHub Projects board for defect tracking',
+        evidence: ['Ran a two-week Agile sprint with a shared GitHub Projects board for sprint tasks'],
+      }),
+    ],
+    [],
+    undefined,
+    undefined,
+    'You will own defect tracking and triage across the QA function.',
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /defect track/);
+});
+
+test('reverting puts the person’s own sentence back', () => {
+  const theirs = 'Redesigned an offline-sync retry scheduler to fire against the next real retry time';
+  const flags = checkBullets(
+    [bullet({ text: `${theirs}, under tight latency constraints`, evidence: [theirs] })],
+    [], undefined, undefined, APPLIED_AI_POSTING,
+  );
+  assert.equal(flags[0].revertTo, theirs);
+});
+
+// ── good tailoring, which must survive ─────────────────────────────────────
+
+test('one shared word is not an invention', () => {
+  // Measured: one unsourced word that also appears in the posting fires on a
+  // fifth of all bullets and catches nothing the two-word rule misses. This
+  // is how a legitimate rewrite reaches for the employer's vocabulary.
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Built three rule-based detection algorithms to flag anomalous activity in a continuous stream',
+        evidence: ['Built three rule-based detection algorithms to spot anomalous activity in a continuous data stream'],
+      }),
+    ],
+    [], undefined, undefined, 'You will flag fraud in continuous streams.',
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('the posting’s vocabulary for a fact the source has is left alone', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Worked on front-end (mobile, web) and back-end development alongside a small engineering team',
+        evidence: ['Worked across mobile, backend, and web development alongside a small engineering team'],
+      }),
+    ],
+    [], undefined, undefined, 'Front-end and back-end development across mobile and web.',
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('no posting means the check does not run', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Redesigned the retry scheduler, under tight latency constraints',
+        evidence: ['Redesigned the retry scheduler'],
+      }),
+    ],
+    [],
+  );
+  assert.deepEqual(flags, [], 'nothing to compare against, so nothing is claimed');
+});
+
+test('an unchanged bullet is never read for echoes', () => {
+  const same = 'Redesigned an offline-sync retry scheduler under tight latency constraints';
+  const flags = checkBullets(
+    [bullet({ text: same, evidence: [same], changed: false })],
+    [], undefined, undefined, APPLIED_AI_POSTING,
+  );
+  assert.deepEqual(flags, []);
+});
+
+test('the warning quotes the bullet, not the stems it was compared on', () => {
+  // It read: takes "requir" and "multipl" from the posting. Somebody reading a
+  // warning about their own sentence should see their own sentence.
+  const flags = checkBullets(
+    [
+      bullet({
+        text: 'Supported a 30% increase in new business by coordinating client engagement, requiring careful prioritization across multiple accounts',
+        evidence: ['Contributed to a 30% increase in new business by supporting client engagement, contract execution, and operational delivery'],
+      }),
+    ],
+    [], undefined, undefined,
+    'Multitasking with attention to detail under tight deadlines is required across multiple departments.',
+  );
+  assert.equal(flags.length, 1);
+  assert.match(flags[0].reason, /"requiring" and "multiple"/);
+});
+
+test('a lifted phrase is quoted with its own punctuation', () => {
+  const flags = checkBullets(
+    [
+      bullet({
+        text: "Integrated an AI model's input/output contract into a production mobile app",
+        evidence: ['Integrated an AI/LLM model into a production mobile app'],
+      }),
+    ],
+    [], undefined, undefined,
+    'Solid grasp of model inference logic, input/output contracts, and latency constraints.',
+  );
+  assert.match(flags[0].reason, /"input\/output"/);
+});

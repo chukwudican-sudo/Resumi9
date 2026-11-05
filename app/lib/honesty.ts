@@ -153,6 +153,11 @@ const said = (haystack: string, term: string, scattered = false): boolean =>
 const COMMON = new Set([
   ...['and','or','of','the','a','an','in','on','for','with','to','by','at','as','from','into','that','this','it','its','their','our','my','is','are','was','were','be','been','using','used','use','via','per','across','through','over','under','not','no','but','so','than','then','when','while','after','before','out','up','down','off','about','every','all','each','more','most','new','own'],
   ...['built','build','building','made','make','created','create','developed','develop','designed','design','added','add','wrote','write','set','ran','run','worked','work','helped','help','led','lead','shipped','ship','delivered','deliver','implemented','implement','improved','improve','reduced','cut','increased','raised'],
+  // The same register, and all three cost a good rewrite. "Grew client
+  // portfolios" rewritten as "growing portfolios" reads as a new word because
+  // grew and grow are not each other to any stemmer this file is going to
+  // have; "supported" is what everybody writes for everything.
+  ...['grew','grow','growing','grown','support','supports','supported','supporting'],
   ...['project','projects','feature','features','app','application','system','systems','team','teams','code','data','user','users','time','work'],
 ]);
 
@@ -168,6 +173,10 @@ const stem = (word: string): string =>
   word
     .replace(/(?<=.{4})ing$/, '')
     .replace(/(?<=.{4})ed$/, '')
+    // "strategies" and "strategy" are one word, and dropping the s alone
+    // leaves "strategie" against "strategy" — which read as an invention on a
+    // bullet rewritten from the person's own sentence about strategy.
+    .replace(/(?<=.{3})ies$/, 'y')
     .replace(/(?<=.{4})e$/, '')
     .replace(/(?<=.{3})s$/, '');
 
@@ -218,6 +227,154 @@ export function toldByThePerson(text: string, words: string): boolean {
 }
 
 /**
+ * The posting's own words, in a rewrite, where the source has nothing.
+ *
+ * The invention this catches is not a lie about a tool — the requirement check
+ * above has that one — it is a true sentence with a clause welded on:
+ *
+ *     redesigning an offline-sync retry scheduler TO FLAG ANOMALIES and fire
+ *     against the next real retry time, UNDER TIGHT LATENCY CONSTRAINTS
+ *
+ * The scheduler retries failed syncs. It does not flag anomalies, there is no
+ * latency constraint anywhere in the person's notes, and both phrases are
+ * sitting in the posting. An interviewer reads "flag anomalies" and asks about
+ * it, which is the whole cost.
+ *
+ * **Two words, not one.** Measured over 139 real bullets from one apply run:
+ * one unsourced word that also appears in the posting fires on 20% of bullets;
+ * demanding two fires on 10% and catches exactly the same inventions, so the
+ * second word is free precision. A single word is how a legitimate rewrite
+ * reaches for the employer's vocabulary for a fact the person does have.
+ *
+ * **A phrase counts for both of them.** Two content words running together in
+ * the bullet and in the posting and in neither case in the source is the
+ * strongest signal available and the cheapest to read: on the same 139 it
+ * fired nine times, eight of them phrases from the bug report's own table.
+ *
+ * **What it cannot see**, said plainly because the gap matters: a claim built
+ * from words the source already contains. "integration checks before merge"
+ * on a bullet whose source says "payment integration", "to prepare data for
+ * the models" where the source says "AI/LLM model". Nothing lexical reaches
+ * those — of eleven inventions in the report, this reads six.
+ */
+const lifted = (text: string, evidence: string, posting: string): string | null => {
+  if (!posting.trim()) return null;
+
+  /**
+   * Content words in order, one per word written, separators closed up.
+   *
+   * "back-end" and "backend" are one word, and so are "front-end",
+   * "offline-sync" and "Node.js" — the same point patternFor makes about
+   * requirements. Read without this, a rewrite of "mobile, backend, and web
+   * development" was flagged for taking "back-end development" from the
+   * posting, which is a hyphen, not a claim.
+   */
+  const inOrder = (from: string): string[] =>
+    ((from ?? '').toLowerCase().match(/[a-z0-9][a-z0-9+#.-]*/g) ?? [])
+      .map((w) => w.replace(/^[.-]+|[.-]+$/g, ''))
+      .filter((w) => w.length >= 3 && !COMMON.has(w))
+      .map((w) => stem(w).replace(/[.-]/g, ''));
+
+  /**
+   * The same, plus the halves of anything compound — for membership only.
+   *
+   * Closing the separators alone goes wrong in the other direction: the
+   * posting writes "low-latency" and the bullet writes "latency constraints",
+   * and one squashed word does not contain the other. A compound says both of
+   * its parts, so for "is this word in the source" and "is this word in the
+   * posting" both parts count. Never used for the pairs, where one word per
+   * word written is what makes two of them adjacent.
+   */
+  const wordSet = (from: string): Set<string> => {
+    const out = new Set<string>();
+    for (const raw of (from ?? '').toLowerCase().match(/[a-z0-9][a-z0-9+#.-]*/g) ?? []) {
+      const word = raw.replace(/^[.-]+|[.-]+$/g, '');
+      for (const part of [word, ...word.split(/[.-]/)]) {
+        if (part.length >= 3 && !COMMON.has(part)) out.add(stem(part).replace(/[.-]/g, ''));
+      }
+    }
+    return out;
+  };
+
+  /** Pairs of content words that sit next to each other once the filler goes. */
+  const pairs = (from: string): Set<string> => {
+    const words = inOrder(from);
+    const out = new Set<string>();
+    for (let i = 0; i + 2 <= words.length; i += 1) out.add(`${words[i]} ${words[i + 1]}`);
+    return out;
+  };
+
+  /**
+   * The same words, each with where it sits, so what gets SAID is what the
+   * bullet says.
+   *
+   * Reported off the stems, the message read: takes "requir" and "multipl"
+   * from the posting. The stems are how the comparison is made and are not
+   * words — somebody reading a warning about their own sentence should see
+   * their own sentence, so the phrase is sliced back out of the original.
+   */
+  const placed = (from: string): { stem: string; at: number; end: number }[] => {
+    const out: { stem: string; at: number; end: number }[] = [];
+    for (const found of from.toLowerCase().matchAll(/[a-z0-9][a-z0-9+#.-]*/g)) {
+      const raw = found[0];
+      const trimmed = raw.replace(/^[.-]+|[.-]+$/g, '');
+      if (trimmed.length < 3 || COMMON.has(trimmed)) continue;
+      const at = (found.index ?? 0) + raw.indexOf(trimmed);
+      out.push({ stem: stem(trimmed).replace(/[.-]/g, ''), at, end: at + trimmed.length });
+    }
+    return out;
+  };
+  const written = placed(text);
+  /** One word or a run of two, as the bullet punctuated it. */
+  const asWritten = (from: number, to = from) => text.slice(written[from].at, written[to].end);
+
+  const inSource = wordSet(evidence);
+
+  /*
+   * A pair counts when the posting has it and the SOURCE is missing a word of
+   * it — not when the source merely lacks the pair.
+   *
+   * The difference is a good rewrite. "Worked across mobile, backend, and web
+   * development" rewritten as "front-end (mobile, web) and back-end
+   * development" makes the pair "mobile web", which the source does not
+   * contain as a pair and does contain as two words. Reordering a sourced fact
+   * is the thing tailoring is FOR, and the pair test alone called it an
+   * invention — the same mistake, in the same place, that cost a good rewrite
+   * when requirements were matched whole.
+   */
+  const theirs = pairs(posting);
+  for (let i = 0; i + 1 < written.length; i += 1) {
+    const [first, second] = [written[i].stem, written[i + 1].stem];
+    if (!theirs.has(`${first} ${second}`)) continue;
+    if (!inSource.has(first) || !inSource.has(second)) return asWritten(i, i + 1);
+  }
+
+  /*
+   * Two separate words, which is the other half and catches what the pairs
+   * cannot: the posting says "flag performance anomalies" and the bullet says
+   * "to flag anomalies", so no pair is shared and both words are new.
+   */
+  const inPosting = wordSet(posting);
+  /*
+   * One word per word written on the bullet's side, deliberately.
+   *
+   * Counting a compound's halves too lets one hyphen supply both of the two
+   * words this rule asks for: "front-end (mobile, web)" rewritten from
+   * "mobile, backend, and web" was flagged for taking "frontend" AND "front",
+   * which is one word twice.
+   */
+  const added: string[] = [];
+  const counted = new Set<string>();
+  for (let i = 0; i < written.length; i += 1) {
+    const { stem: word } = written[i];
+    if (counted.has(word) || inSource.has(word) || !inPosting.has(word)) continue;
+    counted.add(word);
+    added.push(asWritten(i));
+  }
+  return added.length >= 2 ? added.slice(0, 2).join('" and "') : null;
+};
+
+/**
  * Checks one pass of tailoring, and says what to put back.
  *
  * `requirements` are the posting's own extracted terms. A requirement appearing
@@ -238,6 +395,15 @@ export function checkBullets(
    * insulting.
    */
   sourceLabel = 'your profile',
+  /**
+   * The posting's whole text, for the echo check below.
+   *
+   * Not the extracted requirement list, which is where this check started and
+   * is why these got through: the list holds normalised tool names, and
+   * "flag anomalies", "latency constraints" and "defect tracking" are none of
+   * those. Empty string behaves exactly as before.
+   */
+  posting = '',
 ): Flag[] {
   const flags: Flag[] = [];
 
@@ -308,6 +474,23 @@ export function checkBullets(
     const stock = STOCK.find((term) => said(bullet.text, term) && !said(evidence, term));
     if (stock) {
       flags.push({ text: bullet.text, revertTo: fallback, reason: `adds "${stock}", which this bullet does not say` });
+      continue;
+    }
+
+    /*
+     * The posting's words where the source has nothing. See `lifted`.
+     *
+     * Last of the wording checks on purpose: it is the broadest, so anything
+     * the narrower ones can name gets named by them instead — "claims
+     * \"python\"" tells somebody more than "reaches for \"python testing\"".
+     */
+    const echoed = lifted(bullet.text, evidence, posting);
+    if (echoed) {
+      flags.push({
+        text: bullet.text,
+        revertTo: fallback,
+        reason: `takes "${echoed}" from the posting, which ${sourceLabel === 'your profile' ? 'your profile' : sourceLabel} does not say`,
+      });
       continue;
     }
 

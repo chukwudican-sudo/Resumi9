@@ -405,7 +405,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       );
     }
 
-    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? [], asked, 'the previous version');
+    const flags = checkBullets(
+      resolved.bullets,
+      (posting?.requirements as string[]) ?? [],
+      asked,
+      'the previous version',
+      [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+    );
     const honest = applyFlags(resolved.structure, flags, 'the previous version');
 
     // The source here is the version on screen, not the profile — so the guard

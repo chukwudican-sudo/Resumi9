@@ -123,6 +123,16 @@ export async function POST(_request: Request, { params }: { params: { id: string
     const structure = profileStructure!;
 
     const posting = record.posting;
+    /*
+     * The posting as written, used twice and defined once.
+     *
+     * The fitter scores skills lines against it and the honesty check reads it
+     * for phrases a rewrite reached for. Both want the DESCRIPTION, not the
+     * extracted requirement list, and for the same reason: the list is
+     * normalised tool names, so it answers neither "how much of this line do
+     * they care about" nor "did this bullet take its words from here".
+     */
+    const postingWords = [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n ');
 
     // Things they have told us that never made it onto the page. Offered as
     // material the tailor may use, never as licence to invent: each line is
@@ -227,7 +237,15 @@ export async function POST(_request: Request, { params }: { params: { id: string
       );
     }
 
-    const flags = checkBullets(resolved.bullets, (posting?.requirements as string[]) ?? []);
+    const flags = checkBullets(
+      resolved.bullets,
+      (posting?.requirements as string[]) ?? [],
+      undefined,
+      undefined,
+      // The posting's own prose, for the echo check: the extracted list holds
+      // tool names, and nothing on it says "flag anomalies".
+      postingWords,
+    );
     const honest = applyFlags(resolved.structure, flags);
     if (flags.length) {
       console.error(`[Resumi9] Tailoring made ${flags.length} claim(s) the profile does not support; put back.`);
@@ -289,7 +307,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // For ranking the skills lines. The model ranks entries; a skills line
       // the app can score itself — by how many of its own tools this employer
       // actually mentions, read off the posting's whole text.
-      posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+      posting: postingWords,
       // Their promises, read off the version they made them on.
       pinned: ((lastVersion?.pins as Pin[]) ?? []).filter((pin) => pin && pin.place && pin.text),
       /*
