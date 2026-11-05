@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import test from 'node:test';
-import { INSTRUCT_TOOL, tailorToolFor } from './shared';
+import Anthropic from '@anthropic-ai/sdk';
+import { INSTRUCT_TOOL, capacityResponse, tailorToolFor } from './shared';
 
 /**
  * What the tools ask for is a prompt in its own right.
@@ -67,4 +68,42 @@ test('an edit returns the same narrow resume the tailor does', () => {
   assert.equal('name' in structure.properties, false);
   assert.equal('contact' in structure.properties, false);
   assert.equal((INSTRUCT_TOOL.input_schema as any).required.includes('estimatedPages'), false);
+});
+
+// ── out of credit ──────────────────────────────────────────────────────────
+
+test('running out of credit reads as capacity, not as a bad request', async () => {
+  /*
+   * It arrives as a plain 400 with no code of its own, so every catch in the
+   * app read it as a malformed request: one real run reported "something went
+   * wrong" when the bill had simply not been paid.
+   *
+   * It is the app's account and never the person's, so the sentence says the
+   * thing that is true and useful to them and points at no billing page they
+   * do not own. The route refunds their credit before this is read, which is
+   * why it can say nothing was charged.
+   */
+  const message =
+    'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.';
+  const error = new Anthropic.APIError(
+    400,
+    { type: 'error', error: { type: 'invalid_request_error', message } },
+    message,
+    undefined,
+  );
+
+  const response = capacityResponse(error);
+  assert.ok(response, 'it is recognised');
+  assert.equal(response.status, 429);
+  const body = await response.json();
+  assert.match(body.error.message, /on us, not you/);
+  assert.match(body.error.message, /nothing was charged/);
+  assert.equal(body.error.creditKept, true);
+  assert.equal(/Plans & Billing|balance/i.test(body.error.message), false, 'and says nothing about a bill they do not pay');
+});
+
+test('a genuinely bad request still reports as one', () => {
+  const message = 'tool_choice: type "tool" is not supported for this model.';
+  const error = new Anthropic.APIError(400, { type: 'error', error: { type: 'invalid_request_error', message } }, message, undefined);
+  assert.equal(capacityResponse(error), null, 'or a real bug hides behind a reassuring sentence');
 });
