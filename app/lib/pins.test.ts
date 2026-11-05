@@ -253,3 +253,24 @@ test('a malformed check is ignored rather than thrown on', () => {
 test('a rule naming a degree pins nothing, because education is never cut', () => {
   assert.deepEqual(pinsFromRules([rule(['Ontario Tech University'])], RESUME), []);
 });
+
+test('a rule names a job loosely and the pin still holds', () => {
+  /*
+   * The real one, and it pinned nothing.
+   *
+   * The rule read "Always include the Aegon Wealth Manager experience entry",
+   * so its check stored "Aegon Wealth Manager" — a title and an employer run
+   * together. That resolves to the right entry, whose org is "Aegon" and
+   * whose title is "Wealth Manager (...)" — and a pin carrying the rule's own
+   * phrasing matched neither, so it was dropped as naming something not on
+   * the resume. Nothing pinned, nothing said, the job dropped as before.
+   */
+  const pins = pinsFromRules([rule(['Aegon Wealth Manager', 'Droady Software Engineer'])], RESUME);
+  assert.deepEqual(pins, [
+    { place: 'experience', text: 'Aegon', label: 'Aegon' },
+    { place: 'experience', text: 'Droady', label: 'Droady' },
+  ]);
+  // And the pin holds against the resume it was read from, which is the test
+  // that failed before: a pin nothing can match is silently no pin at all.
+  assert.deepEqual(missingPins(RESUME, pins), []);
+});

@@ -219,15 +219,28 @@ export function pinsFromRules(
       const name = typeof raw === 'string' ? raw.trim() : '';
       if (!name) continue;
 
-      // An employer or a project, by name. Education is never cut to reach a
-      // page limit, so a rule naming a degree is already satisfied.
-      const asJob = (structure.experience ?? []).some((e) => e.org && named(name, e.org));
-      const asProject = (structure.projects ?? []).some((p) => p.name && named(name, p.name));
-      if (asJob) add(pinEntry('experience', name));
-      if (asProject) add(pinEntry('projects', name));
-      if (asJob || asProject) continue;
+      /*
+       * Pinned by what the RESUME calls it, not by what the rule called it.
+       *
+       * A real rule read "Always include the Aegon Wealth Manager experience
+       * entry", so the name stored on its check was "Aegon Wealth Manager" —
+       * a title and an employer run together. That resolves to the right
+       * entry, whose org is "Aegon" and whose title is "Wealth Manager
+       * (Client Services & Financial Planning)" — and a pin carrying the
+       * rule's phrasing then matched neither, so it was dropped as naming
+       * something not on the resume. Nothing pinned, no warning, and the job
+       * went exactly as before.
+       *
+       * Education is never cut to reach a page limit, so a rule naming a
+       * degree is already satisfied and pins nothing.
+       */
+      const jobs = (structure.experience ?? []).filter((e) => e.org && named(name, e.org));
+      const projects = (structure.projects ?? []).filter((p) => p.name && named(name, p.name));
+      for (const job of jobs) add(pinEntry('experience', job.org));
+      for (const project of projects) add(pinEntry('projects', project.name));
+      if (jobs.length || projects.length) continue;
 
-      // A skills line, or one tool on one.
+      // A skills line, or one tool on one — again by what the resume calls it.
       for (const group of structure.skills ?? []) {
         const category = (group.category ?? '').trim();
         if (category && named(name, category)) add({ place: 'skills', text: category, label: `the ${category} line` });
