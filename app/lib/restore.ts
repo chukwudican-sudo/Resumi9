@@ -27,7 +27,30 @@ export interface Restore {
 
 export type RestoreRead = { restore: Restore } | { ask: string } | null;
 
-const ASKING_BACK = /\b(?:add|put|bring|restore|reinstate|return|want|need)\b/i;
+const ASKING_BACK = /\b(?:add|put|bring|restore|reinstate|return|want|need|include|show|use)\b/i;
+
+/**
+ * Asking for something IN, without the word "back" anywhere.
+ *
+ * The real sentence this missed: "Replace the Kudi Kitchen experience entry
+ * with the Rate Limit Lab project". No "add", no "back" — so nothing read it
+ * as a request to bring anything in, the whole sentence went to the model,
+ * and the model answered that Rate Limit Lab "is not available to add". It
+ * was sitting in the list of things the app had taken off, one lookup away.
+ */
+const SWAPPING = /\b(?:replace|replacing|replaced|swap|swapping|substitute|substituting|instead\s+of|in\s+place\s+of)\b/i;
+
+/**
+ * Which side of a swap is the thing coming IN.
+ *
+ * "Replace A with B" and "swap A for B" put it after the connector; "use B
+ * instead of A" and "put B in place of A" put it before. Reading the wrong
+ * side restores the entry they asked to get rid of, which on the resume this
+ * was found on would have been possible: Kudi Kitchen is both a job on the
+ * page and a project the app had taken off.
+ */
+const INCOMING_AFTER = /\b(?:replace|replacing|replaced|swap|swapping|substitute|substituting)\b[\s\S]*?\b(?:with|for)\b/i;
+const INCOMING_BEFORE = /\b(?:instead\s+of|in\s+place\s+of)\b/i;
 const BACK = /\bback\b|\brestor\w*|\breinstat\w*/i;
 const EVERYTHING = /\b(?:all|everything|every\s+one|the\s+lot|them\s+all|all\s+of\s+(?:them|it))\b/i;
 const THE_JOBS = /\b(?:jobs?|roles?|experiences?|positions?|work\s+history)\b/i;
@@ -70,16 +93,46 @@ function nothingElse(text: string, names: string[]): boolean {
 export function readRestore(text: string, dropped: DroppedEntry[], answer = ''): RestoreRead {
   const words = (text ?? '').trim();
   if (!words || !dropped.length) return null;
-  if (!ASKING_BACK.test(words) || !BACK.test(words)) return null;
+
+  const swap = SWAPPING.test(words);
+  if (!swap && (!ASKING_BACK.test(words) || !BACK.test(words))) return null;
 
   const inOrder = [...dropped].sort((a, b) => a.index - b.index);
   const named = (from: string) => inOrder.filter((d) => d.name && patternFor(d.name).test(from));
 
+  /*
+   * On a swap, only the incoming half of the sentence is read for names.
+   *
+   * Otherwise "replace Kudi Kitchen with Rate Limit Lab" brings back the Kudi
+   * Kitchen project as well as the Rate Limit Lab one — both are on the list
+   * of things taken off, and the sentence names both.
+   */
+  const incoming = (() => {
+    if (!swap) return words;
+    const after = INCOMING_AFTER.exec(words);
+    if (after) return words.slice(after.index + after[0].length);
+    const before = INCOMING_BEFORE.exec(words);
+    if (before) return words.slice(0, before.index);
+    return words;
+  })();
+
   // A name wins over everything: "put Droady back" is not ambiguous because
   // the sentence also contains the word "jobs".
-  const byName = named(words);
+  const byName = named(incoming);
   if (byName.length) {
-    return { restore: { entries: byName, only: nothingElse(words, byName.map((d) => d.name)) && !answer } };
+    /*
+     * A swap is never `only`.
+     *
+     * `only` means the app can carry the whole sentence out by itself with no
+     * model call. Bringing something in is half of a swap; what goes out is
+     * the other half, and skipping it would answer a replace with an add.
+     */
+    return {
+      restore: {
+        entries: byName,
+        only: !swap && nothingElse(words, byName.map((d) => d.name)) && !answer,
+      },
+    };
   }
 
   const jobs = inOrder.filter((d) => d.section === 'experience');
@@ -116,6 +169,48 @@ export function readRestore(text: string, dropped: DroppedEntry[], answer = ''):
   }
 
   return null;
+}
+
+/**
+ * Everything that could come back: what the app took off, plus anything in
+ * their profile that is not on this page.
+ *
+ * `dropped` is the better source and stays first in the list — it holds the
+ * entry as it was PRINTED, tailored wording and all, so putting it back is a
+ * copy rather than a rebuild. But it only ever held what the app itself cut,
+ * and somebody asking for a project they have is not asking a question about
+ * the app's bookkeeping. The profile fills the rest in, in their own words.
+ *
+ * Matched by name, because that is what a person types and what the page
+ * shows. An entry already on the page is not offered: adding a second copy of
+ * something is never what "add X" meant.
+ */
+export function couldComeBack(
+  dropped: DroppedEntry[],
+  profile: { experience?: unknown[]; projects?: unknown[] } | null,
+  onThePage: { experience?: unknown[]; projects?: unknown[] } | null,
+): DroppedEntry[] {
+  const key = (name: unknown) => String(name ?? '').trim().toLowerCase();
+  const taken = new Set<string>();
+  for (const d of dropped) taken.add(`${d.section}:${key(d.name)}`);
+
+  const out = [...dropped];
+  for (const section of ['experience', 'projects'] as const) {
+    const here = new Set(
+      ((onThePage?.[section] as any[]) ?? []).map((e) =>
+        key(section === 'experience' ? e?.org : e?.name),
+      ),
+    );
+    ((profile?.[section] as any[]) ?? []).forEach((entry, index) => {
+      const name = String((section === 'experience' ? entry?.org : entry?.name) ?? '').trim();
+      if (!name) return;
+      const id = `${section}:${key(name)}`;
+      if (taken.has(id) || here.has(key(name))) return;
+      taken.add(id);
+      out.push({ section, index, name, entry });
+    });
+  }
+  return out;
 }
 
 /** The resume with those entries back where they were. */

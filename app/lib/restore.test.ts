@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readRestore, restoreLine, withRestored } from './restore';
+import { couldComeBack, readRestore, restoreLine, withRestored } from './restore';
 import type { DroppedEntry } from './fit';
 
 const job = (name: string, index: number): DroppedEntry => ({
@@ -197,4 +197,89 @@ test('anything else in the sentence still reaches the model', () => {
   const read = readRestore('add Aegon back and shorten the Droady bullets', DROPPED);
   assert.ok(read && 'restore' in read);
   assert.equal(read.restore.only, false);
+});
+
+// ── a swap, which never says "back" ────────────────────────────────────────
+//
+// The real sentence this missed, from the Intel resume: "Replace the Kudi
+// Kitchen experience entry with the Rate Limit Lab project". No "add", no
+// "back", so nothing read it as a request to bring anything in — the whole
+// sentence went to the model, and the model answered that Rate Limit Lab "is
+// not available to add". It was in the list of things the app had taken off,
+// one lookup away.
+
+test('replace A with B brings B in', () => {
+  const read = readRestore(
+    'Replace the Kudi Kitchen experience entry with the Rate Limit Lab project, since testing fits this role better',
+    DROPPED,
+  );
+  assert.ok(read && 'restore' in read);
+  assert.deepEqual(read.restore.entries.map((e) => e.name), ['Rate Limit Lab']);
+});
+
+test('the four ways people word a swap', () => {
+  for (const said of [
+    'swap Kudi Kitchen for Rate Limit Lab',
+    'use Rate Limit Lab instead of Kudi Kitchen',
+    'put Rate Limit Lab in place of Kudi Kitchen',
+    'substitute Kudi Kitchen with Rate Limit Lab',
+  ]) {
+    const read = readRestore(said, DROPPED);
+    assert.ok(read && 'restore' in read, said);
+    assert.deepEqual(read.restore.entries.map((e) => e.name), ['Rate Limit Lab'], said);
+  }
+});
+
+test('only the incoming half is read for names', () => {
+  /*
+   * Both halves name something the app took off — Kudi Kitchen is a job on
+   * the page AND a project that was cut — so reading the whole sentence
+   * brings back the very thing they asked to get rid of.
+   */
+  const read = readRestore('replace Rate Limit Lab with WesternBell', DROPPED);
+  assert.ok(read && 'restore' in read);
+  assert.deepEqual(read.restore.entries.map((e) => e.name), ['WesternBell']);
+});
+
+test('a swap is never the app’s whole job', () => {
+  // `only` means the app can carry the sentence out alone. Bringing something
+  // in is half of a swap; what goes out is the other half, and skipping it
+  // would answer a replace with an add.
+  const read = readRestore('swap Kudi Kitchen for Rate Limit Lab', DROPPED);
+  assert.ok(read && 'restore' in read);
+  assert.equal(read.restore.only, false);
+});
+
+// ── what could come back ───────────────────────────────────────────────────
+
+test('an entry in the profile but not on the page can come back', () => {
+  // `dropped` only ever held what the APP cut. Somebody asking for a project
+  // they have is not asking a question about the app's bookkeeping.
+  const profile = {
+    experience: [{ org: 'Droady', bullets: ['a'] }, { org: 'Aegon', bullets: ['b'] }],
+    projects: [{ name: 'Resumi', bullets: ['c'] }, { name: 'MealApp', bullets: ['d'] }],
+  };
+  const page = { experience: [{ org: 'Droady', bullets: ['a'] }], projects: [] };
+  const pool = couldComeBack([], profile, page);
+  assert.deepEqual(pool.map((d) => d.name), ['Aegon', 'Resumi', 'MealApp']);
+});
+
+test('what the app cut comes first, as it was printed', () => {
+  // The dropped copy carries the tailored wording; the profile copy is a
+  // rebuild in their own words. The better one wins.
+  const dropped = [{ section: 'projects' as const, index: 0, name: 'Resumi', entry: { name: 'Resumi', bullets: ['tailored'] } }];
+  const profile = { projects: [{ name: 'Resumi', bullets: ['profile wording'] }] };
+  const pool = couldComeBack(dropped, profile, { projects: [] });
+  assert.equal(pool.length, 1);
+  assert.deepEqual((pool[0].entry as { bullets: string[] }).bullets, ['tailored']);
+});
+
+test('something already on the page is not offered', () => {
+  // Adding a second copy of something is never what "add X" meant.
+  const profile = { projects: [{ name: 'Resumi', bullets: ['a'] }] };
+  assert.deepEqual(couldComeBack([], profile, { projects: [{ name: 'Resumi', bullets: ['a'] }] }), []);
+});
+
+test('no profile at all is just what the app cut', () => {
+  assert.deepEqual(couldComeBack(DROPPED, null, null).map((d) => d.name), DROPPED.map((d) => d.name));
 });

@@ -8,8 +8,8 @@ import { asLines, withoutOrderTalk } from '../../../../lib/changeLog';
 import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
-import { readRestore, restoreLine, withRestored } from '../../../../lib/restore';
-import type { DroppedEntry } from '../../../../lib/fit';
+import { couldComeBack, readRestore, restoreLine, withRestored } from '../../../../lib/restore';
+import { fitToPages, type DroppedEntry } from '../../../../lib/fit';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
@@ -24,6 +24,7 @@ import {
   getActiveRules,
   getApplication,
   getLatestResume,
+  getProfile,
   getSupportingFacts,
   getUser,
   saveResume,
@@ -46,22 +47,6 @@ const FREE_EDITS = 10;
  * and somebody who deliberately placed a section would otherwise discover that
  * days later with no idea what undid it.
  */
-/**
- * Said whenever something comes back that a page limit had taken off.
- *
- * The resume is very likely longer than the rule allows again — it was cut to
- * meet it. Their words win, so it goes back; saying nothing would let them
- * find out from a two-page PDF at the moment they send it.
- *
- * The second sentence used to read "tailoring again will cut it back to fit",
- * which was true and was the whole problem: the thing it cut back was the
- * thing they had just asked for. Asking for something back now pins it, so
- * the next fit spends something else or says it cannot.
- */
-const PAGE_RULE_MAY_BREAK =
-  'This is likely over the page limit in your rules again. It is pinned now, so tailoring again will take ' +
-  'something else off to make room rather than this — and tell you if it cannot.';
-
 const ORDER_IS_LOCAL = 'This order applies to this resume. Tailoring again rebuilds from your profile and puts it back.';
 
 interface InstructResult {
@@ -131,7 +116,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   const wholeResume = body.wholeResume === true || body.scope === 'all';
 
-  const [record, current, rules, user, spent, supporting] = await Promise.all([
+  const [record, current, rules, user, spent, supporting, profile] = await Promise.all([
     getApplication(userId, params.id),
     getLatestResume(userId, params.id),
     getActiveRules(userId),
@@ -147,6 +132,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * weeks earlier.
      */
     getSupportingFacts(userId),
+    // For what could come back: an entry they have but this page does not.
+    getProfile(userId),
   ]);
 
   if (!record) return errorResponse({ type: 'generic', message: 'Application not found.' }, 404);
@@ -165,6 +152,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const structure = current.structure as ResumeStructure;
+  const profileStructure = (profile?.resumeStructure ?? null) as ResumeStructure | null;
   const posting = record.posting;
 
   /*
@@ -242,8 +230,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * move: the app does the thing it can do exactly, and the model is only
    * asked to read a sentence — and here, not even that, unless this misses.
    */
+  /*
+   * Everything that could come back, not only what the app took off.
+   *
+   * `dropped` holds entries as they were printed and is the better source, so
+   * it stays first. But it was the ONLY source, and a real edit asking to
+   * bring a project in was answered "Rate Limit Lab is not available to add"
+   * — about a project sitting in the person's own profile. Their profile is
+   * not the app's bookkeeping, and they should not have to know the
+   * difference.
+   */
   const kept = ((current.dropped as DroppedEntry[]) ?? []).filter((d) => d && d.entry);
-  const asking = readRestore(instruction, kept, answer);
+  const available = couldComeBack(kept, profileStructure, structure);
+  const asking = readRestore(instruction, available, answer);
   if (asking && 'ask' in asking && !answer) {
     return NextResponse.json({ question: asking.ask, editsLeft: FREE_EDITS - spent });
   }
@@ -251,21 +250,62 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (restore && restore.only) {
     const back = new Set(restore.entries.map((e) => `${e.section}:${e.index}`));
+    /*
+     * Asking for something back is the clearest possible way of saying keep
+     * it. Without this the next tailor takes it off again — the same job, for
+     * the same reason, one version after they told the app otherwise.
+     */
+    const pins = alsoPinned(restore.entries.map((e) => pinEntry(e.section, e.name)));
+
+    /*
+     * Room is made for it, rather than the page rule simply breaking.
+     *
+     * This used to put the entry back and say the resume was "likely over the
+     * page limit again" — true, unhelpful, and the next tailor would take the
+     * same thing off. The fitter is now run with what they asked for pinned,
+     * so something they did NOT ask about gives instead: a skills line first,
+     * then the oldest unpinned entry. If nothing unpinned is enough, it says
+     * so and keeps what they asked for.
+     *
+     * No model call on this path, so the whole request budget is free for the
+     * two or three compiles this costs.
+     */
+    const restored = withRestored(structure, restore.entries);
+    const fitted = await fitToPages(restored, {
+      target: pageTarget(
+        rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
+      ),
+      cuts: [],
+      posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+      pinned: pins,
+      measure: async (candidate: ResumeStructure) => {
+        try {
+          return (await compileWithMeta(renderResumeLatex(candidate))).pages;
+        } catch (err) {
+          console.error('[Resumi9] Could not measure a restored resume:', err);
+          return null;
+        }
+      },
+      affords: () => affords(deadline, COMPILE_ESTIMATE_MS),
+    });
+
     const resumeId = await saveResume(userId, params.id, {
-      structure: withRestored(structure, restore.entries),
+      structure: fitted.structure,
       matchScore: current.matchScore,
       missingRequirements: (current.missingRequirements as string[]) ?? [],
-      log: [`You asked: "${instruction}"`, restoreLine(restore.entries), PAGE_RULE_MAY_BREAK],
-      warnings: [],
+      log: [`You asked: "${instruction}"`, restoreLine(restore.entries), ...fitted.log],
+      warnings: fitted.warnings,
       estimatedPages: current.estimatedPages,
-      // Off the list, so it is not offered back a second time.
-      dropped: kept.filter((d) => !back.has(`${d.section}:${d.index}`)),
+      pageCount: fitted.pages,
       /*
-       * Asking for something back is the clearest possible way of saying keep
-       * it. Without this the next tailor takes it off again — the same job,
-       * for the same reason, one version after they told the app otherwise.
+       * Off the list, and whatever the fitter has just taken off is on it.
+       *
+       * Without the second half, making room would lose an entry with nothing
+       * recording that it went — which is the bookkeeping that made "add it
+       * back" work in the first place.
        */
-      pins: alsoPinned(restore.entries.map((e) => pinEntry(e.section, e.name))),
+      dropped: [...kept.filter((d) => !back.has(`${d.section}:${d.index}`)), ...fitted.dropped],
+      pins,
       mode: 'instructed',
     });
     return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
@@ -541,15 +581,42 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const target = pageTarget(
       rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
     );
-    let pages: number | null = null;
-    if (affords(deadline, COMPILE_ESTIMATE_MS)) {
+    const measure = async (candidate: ResumeStructure) => {
       try {
-        pages = (await compileWithMeta(renderResumeLatex(edited))).pages;
+        return (await compileWithMeta(renderResumeLatex(candidate))).pages;
       } catch (err) {
         // The resume is fine; only the measurement failed. Never worth an edit.
         console.error('[Resumi9] Could not measure the edited resume:', err);
+        return null;
       }
-    }
+    };
+
+    /*
+     * Room is made when something was ADDED, and only then.
+     *
+     * A sentence that brings an entry in — "replace Kudi Kitchen with Rate
+     * Limit Lab" — has made the resume longer, and the old behaviour was to
+     * leave it over the limit with a note: the entry came back, the page
+     * broke, and the next tailor took the same thing off again. So the fitter
+     * runs with what they asked for pinned, and something they did NOT ask
+     * about gives — a skills line first, then the oldest unpinned entry.
+     *
+     * An edit that added nothing is measured and nothing else. Refitting
+     * every edit would let a sentence about wording quietly cost an entry,
+     * which is the thing the scope rule above exists to prevent.
+     */
+    const refit = restore
+      ? await fitToPages(edited, {
+          target,
+          cuts: [],
+          posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+          pinned: alsoPinned(restore.entries.map((e) => pinEntry(e.section, e.name))),
+          measure,
+          affords: () => affords(deadline, COMPILE_ESTIMATE_MS),
+        })
+      : null;
+    const fitted = refit?.structure ?? edited;
+    const pages = refit ? refit.pages : affords(deadline, COMPILE_ESTIMATE_MS) ? await measure(edited) : null;
     /*
      * Over the limit, and nothing taken off to get under it.
      *
@@ -567,10 +634,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const requirements = (posting?.requirements as string[]) ?? [];
     const carriedGaps = (current.missingRequirements as string[]) ?? [];
-    const gaps = gapsAfterEdit(carriedGaps, edited, requirements);
+    const gaps = gapsAfterEdit(carriedGaps, fitted, requirements);
 
     const resumeId = await saveResume(userId, params.id, {
-      structure: edited,
+      structure: fitted,
       /*
        * Measured again, against the resume this edit just produced.
        *
@@ -598,7 +665,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          * row, so without this line nothing anywhere remembers it happened.
          */
         ...(answer ? [`We asked: ${question || 'which one?'} You said: "${answer}"`] : []),
-        ...(restore ? [restoreLine(restore.entries), PAGE_RULE_MAY_BREAK] : []),
+        /*
+         * What came back, and what gave way for it.
+         *
+         * There was a sentence here saying the resume was "likely over the
+         * page limit again" and that tailoring again would cut it back. True,
+         * unhelpful, and the thing it cut back was what they had just asked
+         * for. Room is made now instead of promised later, so the log says
+         * what actually went.
+         */
+        ...(restore ? [restoreLine(restore.entries), ...(refit?.log ?? [])] : []),
         ...(move ? [moveLine(move), ORDER_IS_LOCAL] : []),
         // What the edit was held to, and how to ask for it everywhere.
         ...(held.frozen.length ? [frozenLine(held.frozen, scope.named)] : []),
@@ -614,7 +690,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          */
         ...quiet(withoutUndoneClaims(asLines(toolInput.log), guarded.restored)),
       ],
-      warnings: [...surfaced.warnings, ...honest.warnings, ...overLong, ...quiet(asLines(toolInput.warnings))],
+      warnings: [
+        ...surfaced.warnings,
+        ...honest.warnings,
+        ...(refit?.warnings ?? []),
+        ...overLong,
+        ...quiet(asLines(toolInput.warnings)),
+      ],
       // Carried, not asked for. The model's guess was wrong every time it was
       // checked — "slightly over 1 page" for a resume that filled two — so the
       // tool no longer requests it. A real measurement replaces this later.
@@ -623,7 +705,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       pageCount: pages,
       // Carried, not recomputed: an edit cuts nothing, and a list that stopped
       // at the version it was made on would be gone by the next question.
-      dropped: kept.filter((d) => !putBack.has(`${d.section}:${d.index}`)),
+      // Plus whatever making room has just taken off, or an entry would go
+      // with nothing recording that it went.
+      dropped: [...kept.filter((d) => !putBack.has(`${d.section}:${d.index}`)), ...(refit?.dropped ?? [])],
       /*
        * What the sentence said to keep, and anything it asked back.
        *
