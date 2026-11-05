@@ -87,6 +87,8 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
   const [showRules, setShowRules] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [editsLeft, setEditsLeft] = useState<number | null>(null);
+  /** What the last edit was held back from touching, and what was typed. */
+  const [held, setHeld] = useState<{ frozen: string[]; instruction: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
   /*
@@ -98,11 +100,20 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
    */
   const { aboutTheJob: fitNotes, aboutTheApp: appNotes } = splitWarnings(resume?.warnings ?? []);
 
-  async function applyInstruction() {
-    const typed = instruction.trim();
+  /*
+   * The same request, asked again without the scope.
+   *
+   * An edit is held to what its sentence named, and the change log says what
+   * it held. `wholeResume` is how the person says they meant it everywhere —
+   * sent as a fresh edit rather than applied to the version already saved, so
+   * the narrow result stays on the shelf and both are theirs to compare.
+   */
+  async function applyInstruction(again?: { instruction: string; wholeResume: true }) {
+    const typed = again ? again.instruction : instruction.trim();
     if (!typed || editing) return;
     setEditing(true);
     setError(null);
+    setHeld(null);
     try {
       const response = await fetch(`/api/applications/${applicationId}/instruct`, {
         method: 'POST',
@@ -110,9 +121,11 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
         // Answering carries the question and the instruction it was about, so
         // the answer is read against what it answers rather than on its own.
         body: JSON.stringify(
-          asking
-            ? { instruction: asking.instruction, question: asking.question, answer: typed }
-            : { instruction: typed },
+          again
+            ? { instruction: again.instruction, wholeResume: true }
+            : asking
+              ? { instruction: asking.instruction, question: asking.question, answer: typed }
+              : { instruction: typed },
         ),
       });
       const data = await response.json();
@@ -137,6 +150,13 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
 
       setAsking(null);
       setInstruction('');
+      // Only when the app actually held something back, and never on the
+      // second try — asking for the whole resume cannot be held.
+      setHeld(
+        !again && data?.held && Array.isArray(data.held.frozen) && data.held.frozen.length
+          ? { frozen: data.held.frozen as string[], instruction: String(data.held.instruction ?? typed) }
+          : null,
+      );
       // Inside the transition, so the spinner outlasts the request and a second
       // click cannot land on a screen that has not caught up yet.
       startTransition(() => router.refresh());
@@ -831,13 +851,37 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                     </span>
                     <button
                       type="button"
-                      onClick={applyInstruction}
+                      onClick={() => applyInstruction()}
                       disabled={editing || busy || !instruction.trim()}
                       className="rounded bg-accent px-4 py-2 text-[13px] font-medium text-ground transition hover:bg-accent-hover disabled:pointer-events-none disabled:bg-rule-field disabled:text-ink-ghost"
                     >
                       {editing ? 'Applying…' : asking ? 'Answer' : 'Apply'}
                     </button>
                   </div>
+
+                  {/*
+                    * What the edit was held back from touching.
+                    *
+                    * An edit is scoped to what its sentence named, and
+                    * everything else goes back byte for byte. That is almost
+                    * always what somebody wants and occasionally is not, so
+                    * the narrow reading is reported with the wide one one
+                    * click away rather than guessed at.
+                    */}
+                  {held && !editing && (
+                    <div className="mt-3 rounded border border-rule-field bg-band px-3 py-2 text-[11.5px] leading-[1.55] text-ink-muted">
+                      Kept {held.frozen.join(', ')} as {held.frozen.length > 1 ? 'they were' : 'it was'} — your
+                      instruction named something narrower.{' '}
+                      <button
+                        type="button"
+                        onClick={() => applyInstruction({ instruction: held.instruction, wholeResume: true })}
+                        disabled={busy}
+                        className="font-medium text-accent underline decoration-dotted underline-offset-2 transition hover:text-accent-hover disabled:pointer-events-none disabled:text-ink-ghost"
+                      >
+                        Apply to the whole resume
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/*

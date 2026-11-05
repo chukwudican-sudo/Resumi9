@@ -11,6 +11,11 @@ import { moveLine, readMove } from '../../../../lib/sectionMove';
 import { readRestore, restoreLine, withRestored } from '../../../../lib/restore';
 import type { DroppedEntry } from '../../../../lib/fit';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
+import { renderResumeLatex } from '../../../../lib/latexEngine';
+import { compileWithMeta } from '../../../../server/pdf';
+import { COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
+import { pageTarget, type RuleCheck } from '../../../../lib/rules';
+import { frozenLine, onlyWhereAsked, readScope } from '../../../../lib/scope';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
 import { requireUserId } from '../../../../server/auth';
@@ -95,7 +100,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return errorResponse({ type: 'auth', message: 'Your API key may be invalid or out of credits.' }, 500);
   }
 
-  let body: { instruction?: unknown; question?: unknown; answer?: unknown };
+  let body: { instruction?: unknown; question?: unknown; answer?: unknown; wholeResume?: unknown; scope?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -116,6 +121,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   /** The question that was put to them, and their answer, when one was asked. */
   const question = typeof body.question === 'string' ? body.question.trim().slice(0, 500) : '';
   const answer = typeof body.answer === 'string' ? body.answer.trim().slice(0, 500) : '';
+  /*
+   * "I meant the whole resume."
+   *
+   * An edit is held to what its sentence named, and the sentence beside the
+   * result says so and offers this. Sent back on a second try rather than
+   * applied to the version already saved: the first result stands, and the
+   * person gets a new version either way.
+   */
+  const wholeResume = body.wholeResume === true || body.scope === 'all';
 
   const [record, current, rules, user, spent, supporting] = await Promise.all([
     getApplication(userId, params.id),
@@ -358,6 +372,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     },
   ];
 
+  const deadline = Date.now() + REQUEST_BUDGET_MS;
+
   try {
     const { toolInput } = await callClaude<InstructResult>({
       userId,
@@ -380,7 +396,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // An edit is a model call like any other, and it had no budget at all:
       // only the SDK's per-attempt timeout stood between a slow one and the
       // platform killing the function.
-      deadline: Date.now() + REQUEST_BUDGET_MS,
+      deadline,
     });
 
     // The same guard the tailor runs. "Make it shorter" is exactly the
@@ -482,11 +498,71 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // After the guard, like the move: the guard compares against the resume as
     // it was, and an entry spliced in beforehand would read to it as one the
     // model invented.
-    const edited = restore ? withRestored(moved, restore.entries) : moved;
+    const restored = restore ? withRestored(moved, restore.entries) : moved;
     const putBack = new Set((restore?.entries ?? []).map((e) => `${e.section}:${e.index}`));
+
+    /*
+     * Held to what the sentence named, last of all.
+     *
+     * After the guard and after a restore, because both of those put things
+     * back that the model took — read before them, a restored entry would
+     * look like a change nobody asked for, and the guard's own repairs would
+     * be reverted as unasked rewrites. Scoping is about what the MODEL
+     * changed on its own initiative, so it goes after everything the app did
+     * deliberately.
+     *
+     * A restored entry is in scope whatever the sentence said: asking for
+     * something back is naming it.
+     */
+    const namedToo = restore ? `${instruction} ${restore.entries.map((e) => e.name).join(' ')}` : instruction;
+    const scope = readScope(answer ? `${namedToo} ${answer}` : namedToo, structure, wholeResume);
+    const held = onlyWhereAsked(structure, restored, scope);
+    const edited = held.structure;
+    if (held.frozen.length) {
+      console.error(`[Resumi9] An edit rewrote ${held.frozen.join(', ')}, which it was not asked about.`);
+    }
 
     /** Order talk is only the app's to make, and only when there was a move. */
     const quiet = (lines: string[]) => (move ? withoutOrderTalk(lines) : lines);
+
+    /*
+     * How long it is now, which an edit never asked.
+     *
+     * The page rule was enforced at tailor time and then left alone: an edit
+     * cuts nothing, so a sentence that adds a line, puts an entry back or
+     * lengthens three bullets could take the resume over the limit and say
+     * nothing about it. The person found out from the PDF.
+     *
+     * One compile, and only if there is budget left after the model call —
+     * everything below treats "not measured" as not a failure, the same way
+     * the fitter does.
+     */
+    const target = pageTarget(
+      rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
+    );
+    let pages: number | null = null;
+    if (affords(deadline, COMPILE_ESTIMATE_MS)) {
+      try {
+        pages = (await compileWithMeta(renderResumeLatex(edited))).pages;
+      } catch (err) {
+        // The resume is fine; only the measurement failed. Never worth an edit.
+        console.error('[Resumi9] Could not measure the edited resume:', err);
+      }
+    }
+    /*
+     * Over the limit, and nothing taken off to get under it.
+     *
+     * What they asked to keep wins over the page rule — the same order the
+     * fitter now uses for a pin — so this is a sentence rather than a cut.
+     */
+    const overLong =
+      pages !== null && pages > target
+        ? [
+            `This now runs to ${pages === 1 ? 'one page' : `${pages} pages`} and your rules ask for ` +
+              `${target === 1 ? 'one page' : `${target} pages`}. Nothing was taken off to get under it — an edit ` +
+              'changes what you asked about and leaves the rest alone. Tailor again to fit it, or say what should go.',
+          ]
+        : [];
 
     const requirements = (posting?.requirements as string[]) ?? [];
     const carriedGaps = (current.missingRequirements as string[]) ?? [];
@@ -523,6 +599,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         ...(answer ? [`We asked: ${question || 'which one?'} You said: "${answer}"`] : []),
         ...(restore ? [restoreLine(restore.entries), PAGE_RULE_MAY_BREAK] : []),
         ...(move ? [moveLine(move), ORDER_IS_LOCAL] : []),
+        // What the edit was held to, and how to ask for it everywhere.
+        ...(held.frozen.length ? [frozenLine(held.frozen, scope.named)] : []),
         ...surfaced.log,
         ...honest.log,
         // The model's own account comes last and is the only one nobody
@@ -535,11 +613,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          */
         ...quiet(withoutUndoneClaims(asLines(toolInput.log), guarded.restored)),
       ],
-      warnings: [...surfaced.warnings, ...honest.warnings, ...quiet(asLines(toolInput.warnings))],
+      warnings: [...surfaced.warnings, ...honest.warnings, ...overLong, ...quiet(asLines(toolInput.warnings))],
       // Carried, not asked for. The model's guess was wrong every time it was
       // checked — "slightly over 1 page" for a resume that filled two — so the
       // tool no longer requests it. A real measurement replaces this later.
       estimatedPages: current.estimatedPages,
+      // And the measurement, now that one is taken: null stays "not measured".
+      pageCount: pages,
       // Carried, not recomputed: an edit cuts nothing, and a list that stopped
       // at the version it was made on would be gone by the next question.
       dropped: kept.filter((d) => !putBack.has(`${d.section}:${d.index}`)),
@@ -555,7 +635,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       mode: 'instructed',
     });
 
-    return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
+    /*
+     * `held` goes back as well as into the log.
+     *
+     * The log line is the permanent record; this is what lets the screen put
+     * "apply to the whole resume" next to the result while the person is still
+     * looking at it. The instruction travels with it so the second try does
+     * not depend on the box still holding what they typed.
+     */
+    return NextResponse.json({
+      resumeId,
+      editsLeft: FREE_EDITS - spent - 1,
+      ...(held.frozen.length ? { held: { frozen: held.frozen, instruction } } : {}),
+    });
   } catch (error) {
     const refused = capacityResponse(error);
     if (refused) return refused;

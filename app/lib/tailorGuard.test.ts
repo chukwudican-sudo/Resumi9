@@ -628,3 +628,57 @@ test('nothing restored means nothing dropped from the log', () => {
   const lines = ['Removed the Aegon entry.', 'Tightened two bullets.'];
   assert.deepEqual(withoutUndoneClaims(lines, []), lines);
 });
+
+// ── a renamed skills line ──────────────────────────────────────────────────
+//
+// From the Nov 4 run: the Qualcomm ML resume printed "AI & ML" near the top
+// and then, after Tools & Practices at the very bottom, an orphan line
+// reading "AI & Data: AI-Assisted Development Tools". One category, printed
+// twice, because the repair created a line with the old name for the terms it
+// thought were missing.
+
+test('a renamed line gets its put-back terms, not a second line', () => {
+  const tailored = clone();
+  // What the tailor did: renamed the line and dropped one of its items.
+  tailored.skills = [
+    { category: 'Languages', items: 'TypeScript, Java, SQL' },
+    { category: 'Tooling for ML', items: 'Microsoft Excel' },
+  ];
+  const { structure, repairs } = validateTailored(SOURCE, tailored);
+
+  assert.equal(structure.skills.length, 2, `one line per category; got ${structure.skills.map((g) => g.category).join(' | ')}`);
+  const renamed = structure.skills.find((g) => g.category === 'Tooling for ML')!;
+  assert.match(renamed.items, /PowerPoint/, 'the term went home to the renamed line');
+  assert.ok(repairs.some((r) => /put back/i.test(r.logLine ?? r.message)));
+});
+
+test('a line that really is gone still gets one', () => {
+  const tailored = clone();
+  // Nothing of the Tools line survives anywhere, so there is nowhere to put
+  // its terms and a new line is the honest answer.
+  tailored.skills = [{ category: 'Languages', items: 'TypeScript, Java, SQL' }];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.equal(structure.skills.length, 2);
+  assert.match(structure.skills[1].items, /Excel/);
+});
+
+test('the same term is never printed twice', () => {
+  const tailored = clone();
+  tailored.skills = [
+    { category: 'Languages', items: 'TypeScript, Java, SQL, TypeScript' },
+    { category: 'Tools', items: 'Microsoft Excel, Ms PowerPoint, Java' },
+  ];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.deepEqual(structure.skills[0].items.split(', '), ['TypeScript', 'Java', 'SQL']);
+  assert.equal(/Java/.test(structure.skills[1].items), false, 'the second Java goes, the first stays');
+});
+
+test('a line left with nothing after deduping is not printed empty', () => {
+  const tailored = clone();
+  tailored.skills = [
+    { category: 'Languages', items: 'TypeScript, Java, SQL, Microsoft Excel, Ms PowerPoint' },
+    { category: 'Tools', items: 'Microsoft Excel, Ms PowerPoint' },
+  ];
+  const { structure } = validateTailored(SOURCE, tailored);
+  assert.equal(structure.skills.length, 1, 'the duplicate line is gone, not blank');
+});

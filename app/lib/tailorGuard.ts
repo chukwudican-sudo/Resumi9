@@ -600,6 +600,30 @@ export function validateTailored(
    * inside a combined item counts as present.
    */
   const splitTerms = (items: string) => items.split(',').map((t) => t.trim()).filter(Boolean);
+
+  /**
+   * The line a source group was renamed to, judged by what is still on it.
+   *
+   * A renamed line keeps its terms — that is what makes it the same line — so
+   * the one holding most of them is the one to put a missing term back on.
+   * Null when nothing holds any of them, which means the line really is gone
+   * and a new one is the honest answer.
+   */
+  const renamedTo = (
+    group: ResumeStructure['skills'][number],
+    into: ResumeStructure['skills'],
+  ) => {
+    const mine = splitTerms(asText(group.items)).filter((t) => norm(t));
+    let best: { group: (typeof into)[number]; held: number } | null = null;
+    for (const candidate of into) {
+      const items = splitTerms(asText(candidate.items));
+      const held = mine.filter((term) =>
+        items.some((item) => waysOfWriting(term).some((way) => patternFor(way).test(item))),
+      ).length;
+      if (held > 0 && (!best || held > best.held)) best = { group: candidate, held };
+    }
+    return best?.group ?? null;
+  };
   const written = outSkills.map((g) => g.items).join(', ');
   const stillThere = (term: string) =>
     waysOfWriting(term).some((way) => patternFor(way).test(written));
@@ -625,11 +649,58 @@ export function validateTailored(
       const missing = gone.filter((term) => !asked.removesSkill(term));
       if (!missing.length) continue;
       lostTerms.push(...missing);
-      const home = skills.find((g) => norm(g.category) === norm(group.category));
+      /*
+       * Where a put-back term goes when its line has been RENAMED.
+       *
+       * The old answer was to create a line with the source's category name,
+       * and it produced the orphan on a real resume: the tailor renamed
+       * "AI & Data" to "AI & ML" for a machine-learning posting, two of that
+       * line's terms were judged missing, and the repair appended a second
+       * line — "AI & Data: AI-Assisted Development Tools" — stranded at the
+       * bottom under Tools & Practices. One category, printed twice, the
+       * second time with one item under it.
+       *
+       * So a new line is the last resort rather than the default. The term
+       * goes to the line that already holds the most of its old companions,
+       * which is where a renamed line is: same terms, different heading.
+       */
+      const home =
+        skills.find((g) => norm(g.category) === norm(group.category)) ?? renamedTo(group, skills);
       if (home) home.items = [home.items, ...missing].filter(Boolean).join(', ');
       else skills.push({ category: asText(group.category) || 'Skills', items: missing.join(', ') });
     }
   }
+
+  /*
+   * The same term twice, taken out.
+   *
+   * "Data Pipelines" was printed twice on one resume by an older version of
+   * the repair above, and those rows are still read back by edits. Cheap
+   * insurance either way: a reader who sees one item listed twice reads the
+   * whole page as careless, and a repair that appends can always collide with
+   * something a regroup moved.
+   *
+   * First occurrence wins, so the tailor's ordering survives. Exact matches
+   * only — "Vercel" and "Cloud Platforms (Vercel, Cloudflare)" are the same
+   * tool written twice, and judging that is not something to guess at: that
+   * pair is in the person's own profile, where it belongs to them.
+   */
+  const withoutRepeats = (groups: ResumeStructure['skills']) => {
+    const seen = new Set<string>();
+    return groups
+      .map((group) => ({
+        ...group,
+        items: splitTerms(asText(group.items))
+          .filter((item) => {
+            const key = norm(item);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })
+          .join(', '),
+      }))
+      .filter((group) => group.items.trim());
+  };
 
   if (droppedTerms.length) {
     repairs.push(asAsked(`Skills: removed ${droppedTerms.join(', ')}, as you asked.`));
@@ -770,7 +841,7 @@ export function validateTailored(
       education: schools.entries,
       experience: jobs.entries,
       projects: projects.entries,
-      skills,
+      skills: withoutRepeats(skills),
       certifications: keepList(raw.certifications, source.certifications, 'certifications'),
       awards: keepList(raw.awards, source.awards, 'awards'),
       // The tailor's schema has no field for these and forbids extra ones, so
