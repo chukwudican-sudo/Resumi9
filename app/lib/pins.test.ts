@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { missingPins, pinEntry, pinnedOverLine, pinsFromRules, readPins } from './pins';
+import { missingPins, pinEntry, pinnedOverLine, pinsFromRules, readPins, unmatchedNames } from './pins';
 import type { ResumeStructure } from './types';
 
 /**
@@ -273,4 +273,58 @@ test('a rule names a job loosely and the pin still holds', () => {
   // And the pin holds against the resume it was read from, which is the test
   // that failed before: a pin nothing can match is silently no pin at all.
   assert.deepEqual(missingPins(RESUME, pins), []);
+});
+
+// ── a rule naming something they do not have ───────────────────────────────
+
+test('a name that matches no entry is reported, not pinned', () => {
+  assert.deepEqual(unmatchedNames({ kind: 'always_include', names: ['Aegon', 'Barclays'] }, RESUME), ['Barclays']);
+});
+
+test('nothing unmatched when every name lands', () => {
+  assert.deepEqual(unmatchedNames({ kind: 'always_include', names: ['Aegon', 'Figma', 'Resumi'] }, RESUME), []);
+});
+
+test('only an always_include check has names to match', () => {
+  assert.deepEqual(unmatchedNames({ kind: 'max_pages', limit: 1 }, RESUME), []);
+  assert.deepEqual(unmatchedNames(null, RESUME), []);
+  assert.deepEqual(unmatchedNames({ kind: 'always_include', names: 'Aegon' }, RESUME), []);
+});
+
+// ── the three ways people name a job ───────────────────────────────────────
+
+test('employer, title, or both together', () => {
+  // All four of these are one job: org "Droady", title "Software Engineer".
+  for (const name of ['Droady', 'Droady Software Engineer', 'Software Engineer at Droady', 'the Software Engineer role']) {
+    const pins = pinsFromRules([rule([name])], RESUME);
+    assert.deepEqual(pins.map((p) => p.text), ['Droady'], name);
+  }
+});
+
+test('a title with a parenthetical is matched without it', () => {
+  // "Wealth Manager (Client Services & Financial Planning)" is one job, and
+  // nobody types that out.
+  const pins = pinsFromRules([rule(['Wealth Manager'])], RESUME);
+  assert.deepEqual(pins.map((p) => p.text), ['Aegon']);
+});
+
+test('one word of a title does not pin a job', () => {
+  // Otherwise a rule about a skill starts pinning employment: "always include
+  // Python" must not match a "Python Developer" entry.
+  const pins = pinsFromRules([rule(['Software'])], RESUME);
+  assert.deepEqual(pins, []);
+});
+
+test('two jobs sharing a title are both pinned', () => {
+  // The rule is ambiguous and keeping both is the safe reading: too much is
+  // answered with a sentence, too little loses somebody's job.
+  const twice: ResumeStructure = {
+    ...RESUME,
+    experience: [
+      ...RESUME.experience,
+      { title: 'Software Engineer', org: 'Celestica', location: 'Toronto, ON', dates: '2024', bullets: ['a', 'b'] },
+    ],
+  };
+  const pins = pinsFromRules([rule(['Software Engineer'])], twice);
+  assert.deepEqual(pins.map((p) => p.text), ['Droady', 'Celestica']);
 });

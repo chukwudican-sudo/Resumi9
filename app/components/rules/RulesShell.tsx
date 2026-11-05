@@ -23,6 +23,14 @@ export interface Rule {
   source: string;
   /** The app's reading of the rule. Null means guidance — most rules. */
   check: RuleCheck | null;
+  /**
+   * Names on the check that match nothing in their profile.
+   *
+   * Resolved on every render rather than stored, so it stays true after a
+   * profile edit. Non-empty means the rule cannot do what it says, which the
+   * row says instead of "Checked".
+   */
+  unmatched?: string[];
 }
 
 /**
@@ -297,6 +305,26 @@ export default function RulesShell({ initialRules }: { initialRules: Rule[] }) {
                       {reading.has(rule.id) ? (
                         <span className="mt-1.5 flex items-center gap-2 text-[12px] text-ink-faint">
                           <Spinner /> Working out how to check this…
+                        </span>
+                      ) : rule.unmatched?.length ? (
+                        /*
+                          * Checkable, and naming something they do not have.
+                          *
+                          * One rule read "Always include the Aegon Wealth
+                          * Manager experience entry" and its name matched
+                          * neither the employer nor the title, so it pinned
+                          * nothing — and the page said "Checked" over it. A
+                          * rule that cannot do what it says is worse than a
+                          * rule that says it cannot: there is nothing to
+                          * notice and nothing to fix.
+                          */
+                        <span className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-snug text-flag">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" className="mt-[3px] shrink-0" aria-hidden="true">
+                            <path d="M12 9v4M12 17h.01M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+                          </svg>
+                          {rule.unmatched.length === 1
+                            ? `\u201c${rule.unmatched[0]}\u201d does not match any entry in your profile, so this pins nothing.`
+                            : `${rule.unmatched.map((n) => `\u201c${n}\u201d`).join(', ')} do not match any entry in your profile, so this pins nothing.`}
                         </span>
                       ) : rule.check ? (
                         <span className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-snug text-accent">

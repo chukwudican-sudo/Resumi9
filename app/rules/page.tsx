@@ -1,7 +1,9 @@
 import AppNav from '../components/AppNav';
 import RulesShell, { type Rule } from '../components/rules/RulesShell';
 import { requireUserId } from '../server/auth';
-import { getUser, listRules } from '../server/db/repository';
+import { getProfile, getUser, listRules } from '../server/db/repository';
+import { unmatchedNames } from '../lib/pins';
+import type { ResumeStructure } from '../lib/types';
 
 /**
  * The instructions someone wants applied to every resume they make.
@@ -13,7 +15,20 @@ import { getUser, listRules } from '../server/db/repository';
  */
 export default async function RulesPage() {
   const userId = await requireUserId();
-  const [rows, user] = await Promise.all([listRules(userId), getUser(userId)]);
+  const [rows, user, profile] = await Promise.all([listRules(userId), getUser(userId), getProfile(userId)]);
+
+  /*
+   * A rule that pins something names it in the person's own words, and those
+   * words have to match an entry they actually have. One read "Always include
+   * the Aegon Wealth Manager experience entry", whose name matched neither the
+   * employer nor the title, and the page said "Checked" over a rule that
+   * pinned nothing at all.
+   *
+   * Resolved on every render rather than stored with the check, so it stays
+   * true after a profile edit: delete the job and the rule starts saying the
+   * name matches nothing, which is what it then does.
+   */
+  const structure = (profile?.resumeStructure ?? null) as ResumeStructure | null;
 
   const rules: Rule[] = rows.map((r) => ({
     id: r.id,
@@ -21,6 +36,7 @@ export default async function RulesPage() {
     active: r.active,
     source: r.source,
     check: (r.check as Rule['check']) ?? null,
+    unmatched: structure ? unmatchedNames(r.check, structure) : [],
   }));
 
   return (

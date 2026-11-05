@@ -201,6 +201,76 @@ const named = (text: string, name: string) =>
  * rule says "Aegon" and this resume is the only thing that knows whether that
  * is a job, a project, a skill, or not on the page at all.
  */
+/**
+ * Whether a rule's name is naming this job title.
+ *
+ * Titles come at a pin from three directions — "Aegon Wealth Manager",
+ * "Wealth Manager at Aegon", or the bare employer — and the first two are how
+ * people actually write a rule, because a title is how they think of the job.
+ *
+ * Every word of the title has to be in the name, which is what keeps this from
+ * matching on a leading word: "Software" alone must not pin a Software
+ * Engineer role, or a rule about a skill would start pinning jobs. The
+ * parenthetical goes first, because "Wealth Manager (Client Services &
+ * Financial Planning)" is one job that nobody types out.
+ */
+function titleNamed(ruleName: string, title: string): boolean {
+  const core = (title ?? '').replace(/\([^)]*\)/g, ' ').trim();
+  const words = core.split(/[\s,/&–—-]+/).filter((w) => w.length >= 3);
+  if (words.length < 2) return false;
+  return words.every((word) => patternFor(word).test(ruleName));
+}
+
+/** The entries and skills one rule name refers to on this resume. */
+function whatItNames(name: string, structure: ResumeStructure): Pin[] {
+  const found: Pin[] = [];
+
+  /*
+   * Pinned by what the RESUME calls it, not by what the rule called it.
+   *
+   * A real rule read "Always include the Aegon Wealth Manager experience
+   * entry", so the name stored on its check was "Aegon Wealth Manager" — a
+   * title and an employer run together. That resolves to the right entry,
+   * whose org is "Aegon" and whose title is "Wealth Manager (Client Services
+   * & Financial Planning)" — and a pin carrying the rule's phrasing matched
+   * neither, so it was dropped as naming something not on the resume.
+   * Nothing pinned, no warning, and the job went exactly as before.
+   *
+   * Education is never cut to reach a page limit, so a rule naming a degree
+   * is already satisfied and names nothing here.
+   */
+  for (const job of structure.experience ?? []) {
+    if ((job.org && named(name, job.org)) || titleNamed(name, job.title ?? '')) {
+      found.push(pinEntry('experience', job.org));
+    }
+  }
+  for (const project of structure.projects ?? []) {
+    if (project.name && named(name, project.name)) found.push(pinEntry('projects', project.name));
+  }
+  if (found.length) return found;
+
+  // A skills line, or one tool on one — again by what the resume calls it.
+  for (const group of structure.skills ?? []) {
+    const category = (group.category ?? '').trim();
+    if (category && named(name, category)) found.push({ place: 'skills', text: category, label: `the ${category} line` });
+    for (const item of String(group.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
+      if (waysOfWriting(item).some((way) => patternFor(way).test(name))) {
+        found.push({ place: 'skills', text: item, label: item });
+      }
+    }
+  }
+  return found;
+}
+
+/** The names on a rule's check that match nothing on this resume. */
+export function unmatchedNames(check: unknown, structure: ResumeStructure): string[] {
+  const read = check as { kind?: string; names?: unknown } | null | undefined;
+  if (!read || read.kind !== 'always_include' || !Array.isArray(read.names)) return [];
+  return read.names
+    .map((n) => (typeof n === 'string' ? n.trim() : ''))
+    .filter((name) => name && !whatItNames(name, structure).length);
+}
+
 export function pinsFromRules(
   rules: readonly { check?: unknown }[],
   structure: ResumeStructure,
@@ -217,39 +287,7 @@ export function pinsFromRules(
 
     for (const raw of check.names) {
       const name = typeof raw === 'string' ? raw.trim() : '';
-      if (!name) continue;
-
-      /*
-       * Pinned by what the RESUME calls it, not by what the rule called it.
-       *
-       * A real rule read "Always include the Aegon Wealth Manager experience
-       * entry", so the name stored on its check was "Aegon Wealth Manager" —
-       * a title and an employer run together. That resolves to the right
-       * entry, whose org is "Aegon" and whose title is "Wealth Manager
-       * (Client Services & Financial Planning)" — and a pin carrying the
-       * rule's phrasing then matched neither, so it was dropped as naming
-       * something not on the resume. Nothing pinned, no warning, and the job
-       * went exactly as before.
-       *
-       * Education is never cut to reach a page limit, so a rule naming a
-       * degree is already satisfied and pins nothing.
-       */
-      const jobs = (structure.experience ?? []).filter((e) => e.org && named(name, e.org));
-      const projects = (structure.projects ?? []).filter((p) => p.name && named(name, p.name));
-      for (const job of jobs) add(pinEntry('experience', job.org));
-      for (const project of projects) add(pinEntry('projects', project.name));
-      if (jobs.length || projects.length) continue;
-
-      // A skills line, or one tool on one — again by what the resume calls it.
-      for (const group of structure.skills ?? []) {
-        const category = (group.category ?? '').trim();
-        if (category && named(name, category)) add({ place: 'skills', text: category, label: `the ${category} line` });
-        for (const item of String(group.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
-          if (waysOfWriting(item).some((way) => patternFor(way).test(name))) {
-            add({ place: 'skills', text: item, label: item });
-          }
-        }
-      }
+      if (name) for (const pin of whatItNames(name, structure)) add(pin);
     }
   }
   return pins;
