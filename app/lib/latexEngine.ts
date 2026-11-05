@@ -208,30 +208,39 @@ export function linkText(url: string): string {
     .replace(/\/+$/, '');
 }
 
-// Heading contact line: joins present fields with ` $|$ `. Emails/links are
-// wrapped in \href{...}{\underline{...}} like the Jake Gutierrez template.
+/**
+ * The heading, in two deliberate lines.
+ *
+ * How to reach them on the first — phone, email, their own site — and the
+ * profiles somebody looks up on the second. It was one line that wrapped
+ * wherever it ran out of room, which put the break in a different place for
+ * every person depending on how long their handle happened to be. Two lines
+ * chosen is steadier than one line left to chance, and the arrangement is the
+ * same on every resume the app makes.
+ *
+ * Either line can be empty and neither prints a separator it does not need:
+ * somebody with no website and no GitHub gets one line, not a blank second
+ * one and a stray rule.
+ *
+ * \mbox around each address is load-bearing. A URL is full of hyphens and
+ * slashes and LaTeX will break a line at any of them — "linkedin.com/in/
+ * chukwudi-" split across two lines is worse than the label this replaced.
+ * The separators stay breakable, so a line still too long for the page wraps
+ * between addresses rather than inside one.
+ */
 function renderContact(c: ResumeStructure['contact']): string {
-  const parts: string[] = [];
-  if (c.phone) parts.push(escapeLatex(c.phone));
-  if (c.email) parts.push(`\\mbox{\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}}`);
-  /*
-   * Spelled out, and each one unbreakable.
-   *
-   * \mbox is the whole point of writing this out rather than reusing the entry
-   * form: a URL is full of hyphens and slashes, every one of which LaTeX will
-   * happily break a line at, and "linkedin.com/in/chukwudi-" at the end of one
-   * line is worse than a label would have been. The separators between links
-   * stay breakable, so a header too long for one line wraps between addresses
-   * instead of inside one.
-   */
-  for (const link of [c.linkedin, c.github, c.website]) {
-    if (link) {
-      parts.push(
-        `\\mbox{\\href{${escapeLatex(withScheme(link))}}{\\underline{${escapeLatex(linkText(link))}}}}`,
-      );
-    }
-  }
-  return parts.join(' $|$ ');
+  const link = (url: string) =>
+    `\\mbox{\\href{${escapeLatex(withScheme(url))}}{\\underline{${escapeLatex(linkText(url))}}}}`;
+
+  const reach = [
+    c.phone ? escapeLatex(c.phone) : '',
+    c.email ? `\\mbox{\\href{mailto:${escapeLatex(c.email)}}{\\underline{${escapeLatex(c.email)}}}}` : '',
+    c.website ? link(c.website) : '',
+  ].filter(Boolean);
+
+  const profiles = [c.linkedin ? link(c.linkedin) : '', c.github ? link(c.github) : ''].filter(Boolean);
+
+  return [reach.join(' $|$ '), profiles.join(' $|$ ')].filter(Boolean).join(' \\\\ ');
 }
 
 /**

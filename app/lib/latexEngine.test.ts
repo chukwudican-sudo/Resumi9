@@ -244,6 +244,33 @@ function run() {
   );
   assert.match(contactLine, /\} \$\|\$ \\mbox/, 'and the separator between them stays a breakpoint');
 
+  /*
+   * Two deliberate lines: how to reach them, then where to look them up.
+   *
+   * One line that wrapped wherever it ran out of room put the break in a
+   * different place for every person, depending on how long their handle
+   * happened to be. Compiled, this reads:
+   *
+   *   905-922-5891 | chukwudi.can@gmail.com | meetalexius.com
+   *   linkedin.com/in/chukwudi-ndubuisi | github.com/chukwudican-sudo
+   */
+  const [reach, profiles] = contactLine.split(/\s\\\\\s/);
+  assert.match(reach, /905-922-5891/);
+  assert.match(reach, /meetalexius\.com/);
+  assert.ok(!/linkedin|github/.test(reach), 'the profiles are not on the first line');
+  assert.match(profiles, /linkedin\.com/);
+  assert.match(profiles, /github\.com/);
+
+  // Either line can be empty, and neither prints a separator it does not need.
+  const sparse = renderResumeLatex({ ...fixture, contact: { phone: '905-922-5891' } });
+  const onlyLine = sparse.split('\n').find((l) => l.includes('905-922-5891'))!;
+  assert.ok(!onlyLine.includes('\\\\'), 'no blank second line for somebody with no profiles');
+  assert.ok(!onlyLine.includes('$|$'), 'and no stray separator');
+
+  const noPhone = renderResumeLatex({ ...fixture, contact: { github: 'github.com/x' } });
+  const githubOnly = noPhone.split('\n').find((l) => l.includes('github.com/x'))!;
+  assert.ok(!githubOnly.includes('\\\\'), 'nor an empty first line for somebody with only a profile');
+
   // Only the header changed. A project line has no room to spell a repo out,
   // and "GitHub" beside a project name is unambiguous.
   assert.match(
