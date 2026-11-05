@@ -21,7 +21,7 @@ import { asLines } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
-import type { Pin } from '../../../../lib/pins';
+import { readPins, type Pin } from '../../../../lib/pins';
 import { CLAIM_CHECK_ESTIMATE_MS, COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
 import { pageTarget, type RuleCheck } from '../../../../lib/rules';
 import {
@@ -356,8 +356,20 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // the app can score itself — by how many of its own tools this employer
       // actually mentions, read off the posting's whole text.
       posting: postingWords,
-      // Their promises, read off the version they made them on.
-      pinned: ((lastVersion?.pins as Pin[]) ?? []).filter((pin) => pin && pin.place && pin.text),
+      /*
+       * Their promises: the standing ones, then this application's.
+       *
+       * A rule saying to include something was going to the model as prompt
+       * text and binding nothing — "Include the Aegon Wealth Manager
+       * experience entry whenever it fits on one page" was active on an
+       * account whose resume for a robotics posting dropped Aegon. The model
+       * ranks what to cut and the app does the cutting, so a rule about what
+       * stays has to reach the part that cuts.
+       */
+      pinned: [
+        ...rules.flatMap((rule) => readPins(rule.text, structure, true)),
+        ...((lastVersion?.pins as Pin[]) ?? []).filter((pin) => pin && pin.place && pin.text),
+      ],
       /*
        * The model's ranking, followed to the sentences that actually survived.
        *

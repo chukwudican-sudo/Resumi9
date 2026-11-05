@@ -50,6 +50,17 @@ const KEEP =
   /\b(keep|keeps|keeping|kept|leave|leaving|retain|retaining|retained|preserve|preserving|stays?|staying|must\s+(?:include|have|show|keep)|always\s+(?:include|have|show|keep))\b/i;
 
 /**
+ * Keeping, as a standing rule words it.
+ *
+ * "Include the Aegon Wealth Manager experience entry whenever it fits on one
+ * page" was sitting active on a real account, going to the model as prompt
+ * text and binding nothing — and Aegon was dropped from the resume for the
+ * posting it was written for. A rule the app accepted, shows as on, and
+ * checks nothing is worse than no rule.
+ */
+const STANDING_KEEP = /\b(include|includes|including|always|never\s+drop|must)\b/i;
+
+/**
  * The other way people say it: a removal with a refusal in front.
  *
  * "don't remove the Aegon job" reads as nothing at all today — asked.ts
@@ -199,14 +210,33 @@ export function pinEntry(section: 'experience' | 'projects', name: string): Pin 
  * is: which thing was meant can only be decided against the real list, and two
  * things answering to the same words is a fact about this resume.
  */
-export function readPins(instruction: string, structure: ResumeStructure): Pin[] {
+export function readPins(
+  instruction: string,
+  structure: ResumeStructure,
+  /**
+   * A standing rule rather than one sentence in the change box.
+   *
+   * The same promise, worded differently, and the difference matters twice.
+   * A rule says "Include the Aegon entry" where the box would say "keep
+   * Aegon" — a bare "include" is an ADDITION in the box, work for the model,
+   * and in a rule it is the whole point. And a rule says what it is for:
+   * "whenever it fits on one page" is a length word in a sentence that is
+   * emphatically about keeping something, where in the box "keep it to one
+   * page" is about nothing in particular.
+   *
+   * Nothing is loosened about WHAT gets pinned: a rule still has to name
+   * something on the resume, which is what keeps "Keep the resume one page"
+   * from pinning anything at all.
+   */
+  standing = false,
+): Pin[] {
   const text = (instruction ?? '').trim();
   if (!text) return [];
 
-  const keep = KEEP.test(text) || NOT_REMOVED.test(text);
+  const keep = KEEP.test(text) || NOT_REMOVED.test(text) || (standing && STANDING_KEEP.test(text));
   if (!keep) return [];
   // "keep it to one page" promises nothing about any one thing on it.
-  if (ABOUT_LENGTH.test(text) && !NOT_REMOVED.test(text)) return [];
+  if (!standing && ABOUT_LENGTH.test(text) && !NOT_REMOVED.test(text)) return [];
 
   const pins: Pin[] = [];
   const add = (pin: Pin) => {

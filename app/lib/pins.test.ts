@@ -187,3 +187,39 @@ test('several of them read as a list', () => {
   assert.match(line, /keep Western Bell and Figma\b/);
   assert.match(line, /they are kept/);
 });
+
+// ── a standing rule ────────────────────────────────────────────────────────
+//
+// This one was sitting active on a real account, going to the model as prompt
+// text and binding nothing. The resume for the posting it was written for
+// dropped Aegon anyway.
+
+const THE_RULE =
+  'Include the Aegon Wealth Manager experience entry (at least 2 bullets) whenever it fits on one page. ' +
+  'Only drop it when a clearly more relevant technical project or experience needs the space.';
+
+test('a rule saying to include an entry pins it', () => {
+  const pins = readPins(THE_RULE, RESUME, true);
+  assert.deepEqual(pins.map((p) => p.text), ['Aegon']);
+  assert.equal(pins[0].place, 'experience');
+});
+
+test('the same sentence in the change box is read as an addition', () => {
+  // "include X" typed into the box is work for the model. Only a standing
+  // rule reads it as a promise about the page.
+  assert.deepEqual(readPins(THE_RULE, RESUME), []);
+});
+
+test('a page rule pins nothing, because it names nothing', () => {
+  assert.deepEqual(readPins('Keep the resume one page', RESUME, true), []);
+  assert.deepEqual(readPins('Keep it to one page, 10pt or larger', RESUME, true), []);
+});
+
+test('a rule about wording pins nothing', () => {
+  assert.deepEqual(readPins('Never use the word synergy', RESUME, true), []);
+  assert.deepEqual(readPins('Always write in past tense', RESUME, true), []);
+});
+
+test('a rule naming a skill pins the skill', () => {
+  assert.deepEqual(readPins('Always include Figma in my skills', RESUME, true).map((p) => p.text), ['Figma']);
+});
