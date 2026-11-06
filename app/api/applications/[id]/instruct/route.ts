@@ -597,7 +597,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const guarded = validateTailored(structure, honest.structure, {
       sourceLabel: 'the previous version',
       asked,
-      alsoSaid: supporting.map((fact) => fact.text).join(' \n '),
+      /*
+       * Their own sentence counts as their own record.
+       *
+       * The skills check removes any term the record does not mention, and
+       * the record was their profile and their answered facts — not the
+       * instruction they had just typed. So "add Kubernetes to my skills"
+       * went to the model, came back with Kubernetes on the page, and the
+       * guard took it straight off as invented: the app refusing a request
+       * on the grounds that it had not heard it before.
+       *
+       * The prompt already says this — "the instruction is the person's own
+       * account of their own work, and Rule 1 names it as evidence" — and
+       * the guard was the one place not reading it.
+       */
+      alsoSaid: [...supporting.map((fact) => fact.text), instruction, answer].filter(Boolean).join(' \n '),
     });
     const surfaced = surfaceRepairs(guarded.repairs);
 

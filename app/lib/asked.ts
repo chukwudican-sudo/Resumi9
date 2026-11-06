@@ -485,11 +485,17 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
   if (!refused && !grants.length) {
     if (tied.length > 1) {
       ask = `Which one — ${listOf(tied, 'or')}?`;
-    } else if (removal && aboutParts && named.length === 0 && everything.length > 1) {
+    } else if (removal && aboutParts && named.length === 0 && everything.length > 1 && !SKILL_NOUN.test(words)) {
       /*
        * No list of names. Listing them said "you have" and then named six of
        * ten, which is false — and the entries are on the page beside the
        * question anyway, so naming them was redundant as well as wrong.
+       *
+       * Not asked when the sentence says skills. "Take the Docker mention out
+       * of my skills" names no entry and contains a part-word, which is this
+       * branch exactly — and the answer "which job or project?" is about the
+       * wrong half of the resume. They said where; it is a skills edit, and
+       * the skills licence below already covers it.
        */
       ask = 'Which entry? Name the job or project.';
     } else if (!removal && MEANS_BOTH.test(words) && !aboutParts && named.length === 1) {

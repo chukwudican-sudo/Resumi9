@@ -885,3 +885,25 @@ test('a comma inside brackets does not split a term in half', () => {
     'two terms, not three',
   );
 });
+
+test('a skill the person asked for is not stripped as invented', () => {
+  /*
+   * "add Kubernetes to my skills" went to the model, came back with
+   * Kubernetes on the page, and the guard took it straight off: the record
+   * it checks against was the profile and the answered facts, never the
+   * sentence the person had just typed. The app refusing a request on the
+   * grounds that it had not heard it before.
+   */
+  const tailored = {
+    ...SOURCE,
+    skills: [...SOURCE.skills, { category: 'Infrastructure', items: 'Kubernetes' }],
+  };
+  const without = validateTailored(SOURCE, tailored, { sourceLabel: 'the previous version' });
+  assert.ok(!JSON.stringify(without.structure.skills).includes('Kubernetes'), 'unasked, it is still an invention');
+
+  const asAsked = validateTailored(SOURCE, tailored, {
+    sourceLabel: 'the previous version',
+    alsoSaid: 'add Kubernetes to my skills',
+  });
+  assert.ok(JSON.stringify(asAsked.structure.skills).includes('Kubernetes'), 'they said it, so it is theirs');
+});

@@ -397,3 +397,26 @@ test('a name with no section word still asks', () => {
   assert.equal(it.removes('projects', 'Kudi Kitchen'), false);
   assert.equal(it.removes('experience', 'Kudi Kitchen'), false);
 });
+
+// ── a skills edit is not an entry edit ────────────────────────────────────
+
+test('a removal that says skills is not asked which entry', () => {
+  /*
+   * "Which entry? Name the job or project." came back on a skills edit. The
+   * sentence names no entry and carries a part-word, which is that branch
+   * exactly — but it had already said where, and the answer it wanted was
+   * about the wrong half of the resume.
+   */
+  for (const said of [
+    'take the Docker mention out of my skills',
+    'remove the Python line from the skills section',
+    'drop that mention from my tech stack',
+  ]) {
+    assert.equal(asked(said).ask, null, said);
+  }
+});
+
+test('a removal that names no section still asks', () => {
+  // Unchanged: nothing says where, and several entries could own it.
+  assert.ok(asked('remove the second bullet').ask);
+});
