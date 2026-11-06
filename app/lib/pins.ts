@@ -1,3 +1,4 @@
+import { clausesSaying } from './clauses';
 import { patternFor, waysOfWriting } from './requirementMatch';
 import type { ResumeStructure } from './types';
 
@@ -358,8 +359,25 @@ export function readPins(instruction: string, structure: ResumeStructure): Pin[]
     if (!pins.some((p) => p.place === pin.place && flat(p.text) === flat(pin.text))) pins.push(pin);
   };
 
-  const saysKind = (kind: keyof typeof KIND) => KIND[kind].test(text);
-  const aboutParts = PART.test(text);
+  /*
+   * The promise is read from the clause that MAKES it, not from the sentence
+   * around it.
+   *
+   * "Remove the Kudi Kitchen entry from Technical Projects only. Keep the
+   * Kudi Kitchen job in Experience." says "projects" and it says "job", and
+   * this profile has a Kudi Kitchen in both sections — so read whole, it
+   * pinned Kudi Kitchen in both places. The project the person had just asked
+   * to delete became permanently uncuttable, and three versions later the
+   * fitter reported their one-page rule unmeetable because of a promise they
+   * never made.
+   *
+   * `clausesSaying` returns the whole instruction when no clause carries the
+   * verb, so a one-clause sentence reads exactly as it did before.
+   */
+  const promise = clausesSaying(text, KEEP.test(text) ? KEEP : NOT_REMOVED).join(' \n ');
+
+  const saysKind = (kind: keyof typeof KIND) => KIND[kind].test(promise);
+  const aboutParts = PART.test(promise);
 
   /*
    * Entries, by name. A name on both lists — "Kudi Kitchen" is a job and a
@@ -367,8 +385,8 @@ export function readPins(instruction: string, structure: ResumeStructure): Pin[]
    * neither, because keeping too much is answered with a message and keeping
    * too little is answered with a resume that lost it.
    */
-  const inExperience = (structure.experience ?? []).filter((e) => e.org && named(text, e.org));
-  const inProjects = (structure.projects ?? []).filter((p) => p.name && named(text, p.name));
+  const inExperience = (structure.experience ?? []).filter((e) => e.org && named(promise, e.org));
+  const inProjects = (structure.projects ?? []).filter((p) => p.name && named(promise, p.name));
   const only: Array<'experience' | 'projects'> = saysKind('experience') && !saysKind('projects')
     ? ['experience']
     : saysKind('projects') && !saysKind('experience')
@@ -384,9 +402,9 @@ export function readPins(instruction: string, structure: ResumeStructure): Pin[]
    */
   for (const group of structure.skills ?? []) {
     const category = (group.category ?? '').trim();
-    if (category && named(text, category)) add({ place: 'skills', text: category, label: `the ${category} line` });
+    if (category && named(promise, category)) add({ place: 'skills', text: category, label: `the ${category} line` });
     for (const item of String(group.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
-      if (waysOfWriting(item).some((way) => patternFor(way).test(text))) {
+      if (waysOfWriting(item).some((way) => patternFor(way).test(promise))) {
         add({ place: 'skills', text: item, label: item });
       }
     }
@@ -399,7 +417,7 @@ export function readPins(instruction: string, structure: ResumeStructure): Pin[]
    * than every other — a wrong bullet pinned is a wrong thing made permanent.
    */
   if (aboutParts) {
-    const asked = meaningful(text);
+    const asked = meaningful(promise);
     if (asked.length >= 2) {
       const scored = textsIn(structure, 'bullet')
         .map((bullet) => ({ bullet, n: meaningful(bullet).filter((w) => asked.includes(w)).length }))

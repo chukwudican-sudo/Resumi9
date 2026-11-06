@@ -4,7 +4,7 @@ import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '.
 import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { readInstruction } from '../../../../lib/asked';
 import { pinEntry, readPins, samePin, type Pin } from '../../../../lib/pins';
-import { asLines, withoutOrderTalk } from '../../../../lib/changeLog';
+import { aboutWhatSurvived, asLines, entryNames, withoutOrderTalk } from '../../../../lib/changeLog';
 import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
@@ -488,7 +488,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * when somebody wrote "drop the second bullet".
      */
     const asking = typeof toolInput.question === 'string' ? toolInput.question.trim() : '';
-    if (asking && !toolInput.structure) {
+
+    /*
+     * No structure came back, for either of the two reasons there are.
+     *
+     * The tool does not require `structure` — only `log` and `warnings` — and
+     * the model leaves it out in two quite different situations: it asked a
+     * question instead, or it believes the APP is doing the work. The second
+     * one is the app's own doing. The prompt tells it, about anything the
+     * fitter has taken off, that "the APP splices it in from what it kept" and
+     * to "never write the entry yourself", so on "Add the Western Bell
+     * International job to Experience" it correctly returned nothing but a log
+     * reading "the app will splice in its details from your profile".
+     *
+     * That answer used to fall through to the guard, which found no entry in
+     * it matching anything, declared the whole edit unusable and returned a
+     * 502 saying so. The model did exactly what it was told; the app told it
+     * to, then failed to hold up its end, then blamed it. Reproduced on a real
+     * call before this was written.
+     *
+     * So the two reasons are separated here, and in neither of them is a 502
+     * the right answer: whatever the app can do by itself it does, and an
+     * answer it genuinely cannot use says nothing was changed rather than
+     * calling it a fault.
+     */
+    if (!toolInput.structure) {
       /*
        * A question the app can already answer is not asked.
        *
@@ -508,13 +532,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const done = await restoreOnly(restore, [
           `You asked: "${instruction}"`,
           restoreLine(restore.entries),
-          'The rest of that instruction needs another go — ask again and it will be read against this version.',
+          // Only when there was a second half to miss. A sentence that asked
+          // for nothing else has been carried out in full, and telling
+          // somebody to ask again for a thing already done is its own bug.
+          ...(restore.only
+            ? []
+            : ['The rest of that instruction needs another go — ask again and it will be read against this version.']),
         ]);
         return NextResponse.json(done);
       }
-      // Without the list of entries it read back off its own prompt. The app
-      // stopped naming them; the model started.
-      return NextResponse.json({ question: tidyQuestion(asking, structure), editsLeft: FREE_EDITS - spent });
+      if (asking) {
+        // Without the list of entries it read back off its own prompt. The app
+        // stopped naming them; the model started.
+        return NextResponse.json({ question: tidyQuestion(asking, structure), editsLeft: FREE_EDITS - spent });
+      }
+      /*
+       * Neither a change nor a question, and nothing for the app to do.
+       *
+       * Nothing is saved and no edit is counted, so this costs the person a
+       * wait and nothing else. It is deliberately not an error: there is no
+       * fault to report and no retry that would behave differently.
+       */
+      console.error('[Resumi9] Instruct returned neither a structure nor a question.');
+      return errorResponse(
+        {
+          type: 'generic',
+          message: 'Nothing was changed — that instruction came back with no edit in it. Try saying it another way.',
+        },
+        422,
+      );
     }
 
     const resolved = resolveTailored(toolInput.structure, index);
@@ -728,15 +774,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         ...(held.frozen.length ? [frozenLine(held.frozen, scope.named)] : []),
         ...surfaced.log,
         ...honest.log,
-        // The model's own account comes last and is the only one nobody
-        // verified — so a line claiming it removed something the guard put back
-        // does not survive to sit beside the notice saying otherwise.
         /*
-         * The model's own account comes last, and twice filtered when the app
-         * arranged the sections: it does not get to claim a removal the guard
-         * undid, and it does not get to narrate the ordering it had no part in.
+         * The model's own account comes last, and is filtered three ways: it
+         * does not get to claim a removal the guard undid, it does not get to
+         * narrate an ordering it had no part in, and it does not get to
+         * describe work on an entry that is not on the saved page.
+         *
+         * The third one is new and is the reason the other two were not
+         * enough. The model writes about the structure it returned; making
+         * room for a restored entry then cuts others out of it. Both accounts
+         * went into one list unreconciled — "Adding back the Western Bell
+         * International entry under Experience, per your request" sat in a
+         * log for a version that never contained it.
          */
-        ...quiet(withoutUndoneClaims(asLines(toolInput.log), guarded.restored)),
+        ...quiet(
+          aboutWhatSurvived(
+            withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
+            entryNames(fitted),
+            (refit?.dropped ?? []).map((d) => d.name ?? ''),
+          ),
+        ),
       ],
       warnings: [
         ...surfaced.warnings,

@@ -1,3 +1,4 @@
+import { clauseAt } from './clauses';
 import { MONTHS, parseDates } from './entryFormat';
 import { patternFor, waysOfWriting } from './requirementMatch';
 import type { ResumeStructure } from './types';
@@ -202,16 +203,41 @@ function namesOf(name: string): string[] {
  * job but keep Aegon" as a list of two removals.
  */
 function foundAt(text: string, name: string): { at: number; end: number } {
-  let at = -1;
-  let end = -1;
+  const all = everyMention(text, name);
+  return all[0] ?? { at: -1, end: -1 };
+}
+
+/**
+ * Every place a name appears, not only the first.
+ *
+ * One occurrence was enough until an answer began to be read alongside the
+ * question it answers. The route puts the answer FIRST — "remove it
+ * completely" has to precede "cut the Aegon job" or the verb has no name
+ * after it — and that ordering breaks the moment the answer contains the name
+ * as well: "The Kudi Kitchen project" + "Remove the Kudi Kitchen entry…" put
+ * the only recorded position before the verb, so nothing was licensed, the
+ * guard put the project back, and the person was told their answer had
+ * changed nothing.
+ *
+ * Both occurrences are the same entry. Which one the verb is acting on is the
+ * caller's decision, and it cannot make it from a single index.
+ */
+function everyMention(text: string, name: string): { at: number; end: number }[] {
+  const out: { at: number; end: number }[] = [];
   for (const way of namesOf(name)) {
-    const found = patternFor(way).exec(text);
-    if (found && (at < 0 || found.index < at)) {
-      at = found.index;
-      end = found.index + found[0].length;
+    const scan = new RegExp(patternFor(way).source, 'gi');
+    for (let found = scan.exec(text); found; found = scan.exec(text)) {
+      const at = found.index;
+      const end = at + found[0].length;
+      // A longer spelling found at the same place wins: "Kudi Kitchen" over
+      // the "Kudi" inside it, so the span used for the glue test is right.
+      const seen = out.findIndex((o) => o.at === at);
+      if (seen < 0) out.push({ at, end });
+      else if (end > out[seen].end) out[seen] = { at, end };
+      if (scan.lastIndex === at) scan.lastIndex += 1;
     }
   }
-  return { at, end };
+  return out.sort((a, b) => a.at - b.at);
 }
 
 /** Where this name first appears in the text, or -1. */
@@ -286,13 +312,19 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
    * Education is never granted here. A degree is not something an edit to one
    * application should remove; the profile is where it lives.
    */
-  /** Every entry this instruction names, wherever in the sentence it sits. */
+  /**
+   * Every entry this instruction names, at EVERY place it names it.
+   *
+   * A name said twice is one entry mentioned twice, and which mention a verb
+   * is acting on is decided below by position. Recording only the first put
+   * an answer's copy of the name ahead of the instruction's verb and licensed
+   * nothing at all.
+   */
   const named: { at: number; end: number; grant: Grant }[] = [];
   for (const kind of ['experience', 'projects'] as EntryKind[]) {
     for (const entry of source[kind] ?? []) {
       const name = kind === 'experience' ? (entry as { org: string }).org : (entry as { name: string }).name;
-      const { at, end } = foundAt(words, name);
-      if (at >= 0) named.push({ at, end, grant: { kind, name } });
+      for (const { at, end } of everyMention(words, name)) named.push({ at, end, grant: { kind, name } });
     }
   }
 
@@ -359,8 +391,29 @@ export function readInstruction(text: string, source: ResumeStructure): Asked {
         .sort((a, b) => a.at - b.at);
       const nearest = after[0];
       const sharing = after.filter((f) => f.at === nearest?.at);
-      const narrowed = kindsHere.length
-        ? sharing.filter((f) => kindsHere.includes(f.grant.kind))
+
+      /*
+       * The kind word that breaks a tie is the one in THIS verb's clause.
+       *
+       * Read across the whole sentence, a second request supplies words about
+       * its own subject. "Remove the Kudi Kitchen entry from Technical
+       * Projects only. Keep the Kudi Kitchen job in Experience." says
+       * "projects" in one clause and "job" in the other, and this profile has
+       * a Kudi Kitchen in both sections — so both kinds were in play, the tie
+       * stood, and the app asked "which one — the job or the project?" about
+       * a sentence whose first four words had answered it. The person
+       * answered, the removal was still never licensed, and the guard put the
+       * project back twice.
+       *
+       * The sentence-wide reading stays as the fallback: where the clause
+       * says no kind, whatever the sentence says is still better than nothing.
+       */
+      const here = clauseAt(words, from);
+      const kindsInClause = (Object.keys(KIND) as EntryKind[]).filter((kind) => KIND[kind].test(here));
+      const deciding = kindsInClause.length ? kindsInClause : kindsHere;
+
+      const narrowed = deciding.length
+        ? sharing.filter((f) => deciding.includes(f.grant.kind))
         : sharing;
       const candidates = narrowed.length ? narrowed : sharing;
 

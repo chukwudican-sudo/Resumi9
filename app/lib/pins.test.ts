@@ -365,3 +365,39 @@ test('nothing matched, nothing to list', () => {
   assert.deepEqual(matchedLabels({ kind: 'always_include', names: ['Barclays'] }, RESUME), []);
   assert.deepEqual(matchedLabels({ kind: 'max_pages', limit: 1 }, RESUME), []);
 });
+
+// ── a promise made in one clause of a two-clause sentence ──────────────────
+
+test('a keep clause pins only the section it names', () => {
+  /*
+   * "Remove the Kudi Kitchen entry from Technical Projects only. Keep the
+   * Kudi Kitchen job in Experience."
+   *
+   * Read as one sentence this says "Projects" and it says "job", and this
+   * profile has a Kudi Kitchen in both — so it pinned both. The project the
+   * person had just asked to delete became permanently uncuttable, and three
+   * versions later the fitter reported their one-page rule unmeetable
+   * because of a promise they never made.
+   */
+  const pins = readPins(
+    'Remove the Kudi Kitchen entry from Technical Projects only. Keep the Kudi Kitchen job in Experience.',
+    RESUME,
+  );
+  assert.deepEqual(pins, [pinEntry('experience', 'Kudi Kitchen')]);
+});
+
+test('a keep clause with no section word still pins both', () => {
+  // Nothing narrows it, and keeping too much is a message while keeping too
+  // little is a resume that lost something.
+  const pins = readPins('keep Kudi Kitchen', RESUME);
+  assert.deepEqual(pins, [pinEntry('experience', 'Kudi Kitchen'), pinEntry('projects', 'Kudi Kitchen')]);
+});
+
+test('a one-clause promise reads exactly as it did', () => {
+  assert.deepEqual(readPins('keep the Aegon job', RESUME), [pinEntry('experience', 'Aegon')]);
+  assert.deepEqual(readPins('keep the Resumi project', RESUME), [pinEntry('projects', 'Resumi')]);
+});
+
+test('a removal clause on its own promises nothing', () => {
+  assert.deepEqual(readPins('Remove the Kudi Kitchen entry from Technical Projects only.', RESUME), []);
+});

@@ -334,3 +334,66 @@ test('a name that is both a job and a project asks which, by kind', () => {
   };
   assert.match(readInstruction('remove Kudi Kitchen', both).ask ?? '', /the Kudi Kitchen job or the Kudi Kitchen project/);
 });
+
+// ── two requests in one sentence ───────────────────────────────────────────
+//
+// The Scotiabank application, 6 Nov. One sentence saying what to remove and
+// what to keep, about a name this profile holds in BOTH sections — which is
+// the whole difficulty, so the fixture has to hold it twice too.
+
+/** Kudi Kitchen is a job and a project here, as it is in the real profile. */
+const BOTH: ResumeStructure = {
+  ...RESUME,
+  experience: [
+    { title: 'Founder & Web Developer', org: 'Kudi Kitchen', location: 'Oshawa, ON', dates: 'Mar 2025 – Present', bullets: ['sold things'] },
+    ...RESUME.experience,
+  ],
+  projects: [
+    { name: 'Kudi Kitchen', tech: 'HTML, CSS, Stripe', dates: '2026', bullets: ['hand-coded the storefront'] },
+    ...RESUME.projects,
+  ],
+};
+const onBoth = (words: string) => readInstruction(words, BOTH);
+
+test('the section word is read from the clause that asks for the removal', () => {
+  /*
+   * "Remove the Kudi Kitchen entry from Technical Projects only. Keep the
+   * Kudi Kitchen job in Experience."
+   *
+   * Read whole, the sentence says "Projects" and it says "job", so both kinds
+   * were in play, the tie stood, and the app asked "which one — the job or
+   * the project?" about a sentence whose first four words had answered it.
+   */
+  const it = onBoth('Remove the Kudi Kitchen entry from Technical Projects only. Keep the Kudi Kitchen job in Experience.');
+  assert.equal(it.ask, null, 'the sentence already said which');
+  assert.equal(it.removes('projects', 'Kudi Kitchen'), true);
+  assert.equal(it.removes('experience', 'Kudi Kitchen'), false, 'the job was the half to keep');
+});
+
+test('an answer carrying the name does not move it behind the verb', () => {
+  /*
+   * The route reads the answer before the instruction, so a verb in the
+   * answer finds its name in the instruction. That ordering put the ANSWER's
+   * copy of the name ahead of the instruction's verb, and only the first
+   * occurrence was ever recorded — so nothing was licensed and the guard put
+   * the project back under the person's own answer.
+   */
+  const it = onBoth('The Kudi Kitchen project Remove the Kudi Kitchen entry from Technical Projects only.');
+  assert.equal(it.removes('projects', 'Kudi Kitchen'), true);
+  assert.equal(it.removes('experience', 'Kudi Kitchen'), false);
+});
+
+test('a sentence with only one clause reads exactly as it did', () => {
+  // The fallback that makes clause-reading safe to adopt.
+  assert.equal(onBoth('remove the Kudi Kitchen project').removes('projects', 'Kudi Kitchen'), true);
+  assert.equal(onBoth('remove the Kudi Kitchen job').removes('experience', 'Kudi Kitchen'), true);
+  assert.equal(onBoth('remove Droady').removes('experience', 'Droady'), true);
+});
+
+test('a name with no section word still asks', () => {
+  // Nothing here narrows it, so the question is the right answer.
+  const it = onBoth('remove Kudi Kitchen');
+  assert.ok(it.ask, 'two entries answer to that name and nothing says which');
+  assert.equal(it.removes('projects', 'Kudi Kitchen'), false);
+  assert.equal(it.removes('experience', 'Kudi Kitchen'), false);
+});

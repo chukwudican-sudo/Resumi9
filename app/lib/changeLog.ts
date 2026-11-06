@@ -1,3 +1,5 @@
+import { namesEntry, squash } from './names';
+
 /**
  * The change log, made safe to print.
  *
@@ -84,6 +86,55 @@ export function withoutOrderTalk(lines: string[]): string[] {
   const ABOUT_ORDER =
     /\b(?:order(?:ing|ed)?|placement|placed|position(?:ed|ing)?|arrang\w+|layout|sequence|reorder\w*|rendered|above|below|top|bottom|first|last)\b/i;
   return lines.filter((line) => !(SECTION.test(line) && ABOUT_ORDER.test(line)));
+}
+
+/**
+ * Lines about entries that are not on the finished page, dropped.
+ *
+ * The log is written in pieces by passes that run at different times, and
+ * nothing has ever compared it to the resume that was actually saved. The
+ * model describes the structure IT returned; the fitter then cuts entries to
+ * reach the page limit; both sets of sentences are concatenated and stored.
+ *
+ * A real tailor, 6 Nov, produced all of this in one log:
+ *
+ *     Reworded WesternBell website bullet to name HTML/CSS/JavaScript …
+ *     Framed the Droady and WesternBell bullets around troubleshooting …
+ *     Dropped 1 role to fit one page: WesternBell International Ltd..
+ *
+ * Every line true when it was written. Together they describe work on a job
+ * that is not on the page, and the person went looking for a bullet that does
+ * not exist. The fitter's own line already says what happened to it, so the
+ * sentences about work that no longer shows are the ones to go.
+ *
+ * Only lines about nothing BUT departed entries are dropped. "Reworded the
+ * WesternBell and Droady bullets" still describes a real change to Droady,
+ * and half a true sentence beats none.
+ */
+export function aboutWhatSurvived(
+  lines: string[],
+  present: readonly string[],
+  gone: readonly string[],
+): string[] {
+  const named = (line: string, names: readonly string[]) =>
+    names.some((name) => name.trim() && namesEntry(line, name));
+  const left = gone.filter((name) => name.trim() && !present.some((p) => squash(p) === squash(name)));
+  if (!left.length) return lines;
+  return lines.filter((line) => !named(line, left) || named(line, present));
+}
+
+/** The entries a resume actually shows, by the name each answers to. */
+export function entryNames(structure: {
+  experience?: unknown;
+  projects?: unknown;
+  education?: unknown;
+}): string[] {
+  const list = (value: unknown) => (Array.isArray(value) ? value : []);
+  return [
+    ...list(structure.experience).map((e) => (e as { org?: string })?.org ?? ''),
+    ...list(structure.projects).map((p) => (p as { name?: string })?.name ?? ''),
+    ...list(structure.education).map((s) => (s as { school?: string })?.school ?? ''),
+  ].filter(Boolean);
 }
 
 /**

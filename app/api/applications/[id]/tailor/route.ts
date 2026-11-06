@@ -17,7 +17,7 @@ import {
   flagsFromVerdicts,
   type ClaimVerdict,
 } from '../../../../lib/claimCheck';
-import { asLines } from '../../../../lib/changeLog';
+import { aboutWhatSurvived, asLines, entryNames } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
@@ -432,7 +432,21 @@ export async function POST(_request: Request, { params }: { params: { id: string
         ...surfaced.log,
         ...honest.log,
         ...fitted.log,
-        ...withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
+        /*
+         * Checked against the page that was actually saved, last of all.
+         *
+         * The model describes the structure it returned, and the fitter then
+         * cuts entries out of that structure to reach the page limit. Both
+         * accounts went into one list with nothing reconciling them, so a
+         * tailor could log "Reworded WesternBell website bullet…" four lines
+         * above "Dropped 1 role to fit one page: WesternBell International
+         * Ltd." and leave somebody hunting for a bullet that is not there.
+         */
+        ...aboutWhatSurvived(
+          withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
+          entryNames(fitted.structure),
+          fitted.dropped.map((d) => d.name ?? ''),
+        ),
       ],
       warnings: [...surfaced.warnings, ...honest.warnings, ...fitted.warnings, ...asLines(toolInput.warnings)],
       // The column exists and nothing has ever read it back, so the model is

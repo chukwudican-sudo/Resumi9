@@ -82,6 +82,61 @@ test('ordinary edits are left alone', () => {
   assert.equal(read('make it simpler'), null);
 });
 
+/** As the profile really spells it: closed up, with a suffix. */
+const AS_STORED: DroppedEntry[] = [job('WesternBell International Ltd.', 3), project('Rate Limit Lab', 5)];
+
+test('asking for an entry without the word "back"', () => {
+  /*
+   * The three sentences that returned 502 on 6 Nov, one after another.
+   *
+   * Each names an entry the app was holding, each says "add", none says
+   * "back" — so nothing read them as a restore, the whole sentence went to
+   * the model, the model was told the app would splice the entry in, and it
+   * returned a log with no structure. The guard found nothing in that to
+   * match and called the edit unusable.
+   */
+  const name = ['WesternBell International Ltd.'];
+  assert.deepEqual(got('Add the Western Bell International job to Experience', AS_STORED), name);
+  assert.deepEqual(got('Add my Western Bell International job to Experience', AS_STORED), name);
+  assert.deepEqual(
+    got('Add the Western Bell International experience entry with its inventory and logistics bullet', AS_STORED),
+    name,
+  );
+});
+
+test('a plain add the app can finish by itself needs no model', () => {
+  const r = read('Add the Western Bell International job to Experience', AS_STORED);
+  assert.ok(r && 'restore' in r);
+  assert.equal(r.restore.only, true, 'copying one kept entry is not work for a model');
+});
+
+test('an add carrying a second request still reaches the model', () => {
+  const r = read('Add the Western Bell International experience entry with its inventory and logistics bullet', AS_STORED);
+  assert.ok(r && 'restore' in r);
+  assert.equal(r.restore.only, false, 'the bullet half is not the app\'s to decide');
+});
+
+test('the asking verb is looked for everywhere in the sentence', () => {
+  /*
+   * "Drop the second Kudi Kitchen job bullet and use the space to show
+   * Western Bell International under Experience with one bullet" — two
+   * clauses. Reading only the first verb found "use", acting on "the space",
+   * and missed the request entirely. Western Bell was never added and the
+   * change log told the person it had been.
+   */
+  assert.deepEqual(
+    got('Drop the second bullet and use the space to show Western Bell International under Experience', AS_STORED),
+    ['WesternBell International Ltd.'],
+  );
+});
+
+test('a name mentioned rather than asked for is still left alone', () => {
+  // The rule that keeps the two above from swallowing ordinary edits.
+  assert.equal(read('add that I used C# at Droady'), null);
+  assert.equal(read('add a bullet about Droady'), null);
+  assert.equal(read('add a line to the Aegon job about client retention'), null);
+});
+
 test('a sentence about going back is not a restore', () => {
   // "back" alone is not enough; something has to be being asked for.
   assert.equal(read('the dates should go back to 2024'), null);

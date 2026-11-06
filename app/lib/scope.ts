@@ -198,8 +198,28 @@ export function onlyWhereAsked(
       const name = entryName(kind, old);
       const at = after.findIndex((entry, i) => !used.has(i) && flat(entryName(kind, entry)) === flat(name));
       if (scope.touchesEntry(kind, name)) {
-        if (at >= 0) used.add(at);
-        kept.push(at >= 0 ? after[at] : old);
+        /*
+         * In scope and gone: the person asked for it to go, so it goes.
+         *
+         * This branch used to fall back to `old` whenever the entry was
+         * missing, which quietly put back every deletion the sentence had
+         * just licensed. "Replace the Kudi Kitchen project with Resumi"
+         * returned a resume with both — the guard had allowed the removal and
+         * logged "Kudi Kitchen: removed, as you asked", and this line undid it
+         * one pass later without saying so. Same bug for every swap: the thing
+         * being replaced never left, and the fitter cut bullets elsewhere to
+         * make room for an entry that should have taken its place.
+         *
+         * Deciding whether a removal was asked for is NOT this pass's job and
+         * never was. The guard is the gate: `restoreMissing` puts an entry
+         * back unless `asked.removes` granted it, so anything still missing by
+         * the time it reaches here has already been through that test. Scoping
+         * is about what the model changed on its own initiative — a deletion
+         * the guard let through is not that.
+         */
+        if (at < 0) continue;
+        used.add(at);
+        kept.push(after[at]);
         continue;
       }
       if (at >= 0) {
@@ -238,9 +258,22 @@ export function onlyWhereAsked(
 export function frozenLine(frozen: readonly string[], named: readonly string[]): string {
   const list = (items: readonly string[]) =>
     items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0];
+
+  /*
+   * The verb agrees with the subject, not with how many subjects there are.
+   *
+   * "your skills was also rewritten" appeared on every scoped edit — one
+   * frozen item, so the sentence chose the singular, and the item happens to
+   * be plural. It is the most-read line the app writes after an edit, and it
+   * had a grammatical error in it and no capital letter after the full stop.
+   */
+  const subject = list(frozen);
+  const plural = frozen.length > 1 || /\b(skills|bullets|dates)\b/i.test(frozen[0] ?? '');
+
   return (
     `This changed ${named.length ? list(named) : 'what you named'} only. ` +
-    `${list(frozen)} ${frozen.length > 1 ? 'were' : 'was'} also rewritten, and ${frozen.length > 1 ? 'those are' : 'that is'} ` +
-    'back as it was — ask again with "the whole resume" if you wanted it everywhere.'
+    `${subject.charAt(0).toUpperCase()}${subject.slice(1)} ${plural ? 'were' : 'was'} also rewritten, ` +
+    `and ${plural ? 'those are back as they were' : 'that is back as it was'} — ` +
+    'ask again with "the whole resume" if you wanted it everywhere.'
   );
 }

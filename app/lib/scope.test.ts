@@ -103,6 +103,39 @@ test('an entry deleted without being named comes back', () => {
   assert.deepEqual(frozen, ['Droady']);
 });
 
+test('an entry the sentence named and the guard removed stays removed', () => {
+  /*
+   * The Scotiabank swap, which came back with both halves of it.
+   *
+   * "Replace the Kudi Kitchen project with the Resumi project" reached here
+   * with the guard having already allowed the removal — it logged "Kudi
+   * Kitchen: removed, as you asked" — and this pass put the project straight
+   * back, silently, with nothing in `frozen` to say so. The person got a
+   * resume carrying both projects and five bullets cut elsewhere to fit them.
+   *
+   * Whether a removal was asked for is the guard's decision, not this one's.
+   */
+  const scope = readScope('Replace the FraudWatch project with the MealApp project', RESUME);
+  assert.equal(scope.touchesEntry('projects', 'FraudWatch'), true, 'the sentence named it');
+  const edited = edit({ projects: [RESUME.projects[0]] });
+  const { structure, frozen } = onlyWhereAsked(RESUME, edited, scope);
+  assert.deepEqual(
+    (structure.projects as { name: string }[]).map((p) => p.name),
+    ['Resumi'],
+    'FraudWatch is gone, as the sentence asked and the guard allowed',
+  );
+  assert.deepEqual(frozen, [], 'and nothing was held, so nothing is reported');
+});
+
+test('an entry deleted inside a named SECTION also stays removed', () => {
+  // The section noun puts every entry in it in scope, so the same rule applies
+  // to "drop FraudWatch from my projects" as to naming it outright.
+  const scope = readScope('drop FraudWatch from my projects', RESUME);
+  const edited = edit({ projects: [RESUME.projects[0]] });
+  const { structure } = onlyWhereAsked(RESUME, edited, scope);
+  assert.equal((structure.projects as unknown[]).length, 1);
+});
+
 test('a date changed outside the scope goes back too', () => {
   const scope = readScope('shorten the Aegon bullets', RESUME);
   const edited = edit({
@@ -179,4 +212,19 @@ test('several of each read as lists', () => {
   const line = frozenLine(['Droady', 'your skills'], ['Aegon', 'Kudi Kitchen']);
   assert.match(line, /Aegon and Kudi Kitchen only/);
   assert.match(line, /Droady and your skills were also rewritten/);
+});
+
+test('the verb agrees with the subject, not with the count', () => {
+  // "your skills was also rewritten" sat on every scoped edit for weeks.
+  const skills = frozenLine(['your skills'], ['Aegon']);
+  assert.match(skills, /Your skills were also rewritten/, 'plural subject, plural verb, and a capital after the stop');
+  assert.match(skills, /those are back as they were/);
+
+  const entry = frozenLine(['Droady'], ['Aegon']);
+  assert.match(entry, /Droady was also rewritten/);
+  assert.match(entry, /that is back as it was/);
+});
+
+test('the frozen list starts a sentence, so it starts with a capital', () => {
+  assert.ok(!/only\. [a-z]/.test(frozenLine(['your summary'], ['Aegon'])));
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { asLines, mendSplitLines, splitWarnings, storedLines, withoutOrderTalk } from './changeLog';
+import { aboutWhatSurvived, asLines, entryNames, mendSplitLines, splitWarnings, storedLines, withoutOrderTalk } from './changeLog';
 
 // ── asLines ────────────────────────────────────────────────────────────────
 //
@@ -174,4 +174,64 @@ test('a mixed list is sorted, keeping each side in order', () => {
 
 test('an empty list splits into two empty lists', () => {
   assert.deepEqual(splitWarnings([]), { aboutTheApp: [], aboutTheJob: [] });
+});
+
+// ── the log against the page that was actually saved ───────────────────────
+
+test('a line about an entry the fitter cut does not survive', () => {
+  /*
+   * The 6 Nov tailor, verbatim. The first two lines describe work on a job
+   * the third line says was removed, and all three were saved together.
+   */
+  const lines = [
+    'Reworded WesternBell website bullet to name HTML/CSS/JavaScript explicitly.',
+    'Reframed the Aegon advisor-leadership bullet around interpersonal skills.',
+  ];
+  const kept = aboutWhatSurvived(lines, ['Kudi Kitchen', 'Aegon', 'Droady'], ['WesternBell International Ltd.']);
+  assert.deepEqual(kept, ['Reframed the Aegon advisor-leadership bullet around interpersonal skills.']);
+});
+
+test('a line about a departed entry AND a surviving one is kept', () => {
+  // Half a true sentence beats none: the Droady half still happened.
+  const lines = ['Framed the Droady and WesternBell bullets around troubleshooting.'];
+  assert.deepEqual(
+    aboutWhatSurvived(lines, ['Droady'], ['WesternBell International Ltd.']),
+    lines,
+  );
+});
+
+test('the spelling the fitter recorded is not the spelling the model used', () => {
+  // "WesternBell International Ltd." on the dropped list, "Western Bell" in
+  // the sentence. Matching exactly would have let the line through.
+  const lines = ['Added a bullet to Western Bell International about logistics.'];
+  assert.deepEqual(aboutWhatSurvived(lines, ['Aegon'], ['WesternBell International Ltd.']), []);
+});
+
+test('nothing cut, nothing filtered', () => {
+  const lines = ['Shortened the Aegon bullets.'];
+  assert.deepEqual(aboutWhatSurvived(lines, ['Aegon'], []), lines);
+});
+
+test('an entry cut from one section but still present elsewhere stays', () => {
+  // Kudi Kitchen is a job and a project. Dropping the project must not
+  // silence every sentence about the job.
+  const lines = ['Used "Founder & Web Developer" as the Kudi Kitchen job title.'];
+  assert.deepEqual(aboutWhatSurvived(lines, ['Kudi Kitchen'], ['Kudi Kitchen']), lines);
+});
+
+test('a line naming no entry at all is never touched', () => {
+  const lines = ['Tightened the wording throughout.'];
+  assert.deepEqual(aboutWhatSurvived(lines, ['Aegon'], ['Droady']), lines);
+});
+
+test('the names a resume answers to', () => {
+  assert.deepEqual(
+    entryNames({
+      experience: [{ org: 'Aegon' }, { org: 'Droady' }],
+      projects: [{ name: 'Resumi' }],
+      education: [{ school: 'Ontario Tech University' }],
+    }),
+    ['Aegon', 'Droady', 'Resumi', 'Ontario Tech University'],
+  );
+  assert.deepEqual(entryNames({}), []);
 });

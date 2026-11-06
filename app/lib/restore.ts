@@ -1,4 +1,5 @@
 import { patternFor } from './requirementMatch';
+import { namedAtStart, namesEntry, spanFor, waysOfNaming } from './names';
 import type { DroppedEntry } from './fit';
 
 /**
@@ -76,9 +77,37 @@ const PRONOUN = /\b(?:it|them|those|these|that|the\s+ones?)\b/i;
 const FILLER =
   /\b(?:please|pls|can|could|would|you|i|my|me|the|a|an|to|and|also|just|now|ok|okay|thanks|thank|want|need|like|add|put|bring|restore|reinstate|return|back|again|onto|on|in|into|resume|page|it|them|those|these|that|ones?|all|everything)\b|\b(?:as|second|third|fourth|fifth|jobs?|roles?|positions?|entr(?:y|ies)|experiences?|projects?|sections?)\b/gi;
 
+/**
+ * What may sit between an asking verb and the thing being asked for.
+ *
+ * Only the words that carry no object of their own: an article, a possessive,
+ * a politeness. Deliberately NOT "used", "about" or a tool name — those mean
+ * the verb is acting on something else, which is the whole distinction this
+ * is here to draw.
+ */
+const LEADING_FILLER =
+  /^(?:\s+|\b(?:please|pls|can|could|would|you|i|my|our|me|the|a|an|to|and|also|just|now|ok|okay|thanks|thank|that|again|in|into|on|onto)\b)+/i;
+
+/**
+ * Whether the sentence is the request and nothing more.
+ *
+ * Deciding this wrong in the cautious direction costs a model call and twenty
+ * seconds for an instruction the app could have carried out by copying one
+ * entry — which is what happened to every sentence naming an employer whose
+ * stored spelling differs from the one the person typed. The name has to come
+ * out in all the ways it might have been written, not just the one on record.
+ */
 function nothingElse(text: string, names: string[]): boolean {
   let rest = text;
-  for (const name of names) rest = rest.replace(patternFor(name), ' ');
+  for (const name of names) {
+    // Longest spelling first, so "WesternBell International" is taken out
+    // whole rather than leaving "International" behind as a leftover word.
+    for (const way of waysOfNaming(name)) {
+      const span = spanFor(way);
+      if (span) rest = rest.replace(span, ' ');
+      rest = rest.replace(patternFor(way), ' ');
+    }
+  }
   rest = rest.replace(FILLER, ' ').replace(/[^a-z0-9]+/gi, '');
   return rest === '';
 }
@@ -95,10 +124,62 @@ export function readRestore(text: string, dropped: DroppedEntry[], answer = ''):
   if (!words || !dropped.length) return null;
 
   const swap = SWAPPING.test(words);
-  if (!swap && (!ASKING_BACK.test(words) || !BACK.test(words))) return null;
 
   const inOrder = [...dropped].sort((a, b) => a.index - b.index);
-  const named = (from: string) => inOrder.filter((d) => d.name && patternFor(d.name).test(from));
+  /*
+   * Matched through the shared reader, not a pattern built from the stored
+   * spelling.
+   *
+   * `patternFor(d.name)` was exact on everything the profile happened to hold,
+   * suffix included, so "Add the Western Bell International job" did not match
+   * the entry stored as "WesternBell International Ltd." — and the person's
+   * edit came back as a 502. See names.ts for the three spellings it tries.
+   */
+  const named = (from: string) => inOrder.filter((d) => d.name && namesEntry(from, d.name));
+
+  /*
+   * Asking for an entry, without the word "back" anywhere.
+   *
+   * This used to demand "back" as well as a verb, so "Add the Western Bell
+   * International job to Experience" read as nothing at all — an unambiguous
+   * request, about an entry the app was holding, that came back to the person
+   * as a 502.
+   *
+   * What the verb is ACTING ON decides it, not whether the name appears
+   * somewhere in the sentence. "add that I used C# at Droady" names Droady and
+   * is a request to add a fact to an entry, not to restore one; the name is
+   * buried behind the real object of the verb. So the verb and the filler
+   * after it are stripped, and what remains has to BEGIN with the name.
+   *
+   * "back" is still enough on its own, and still required when no name is
+   * given — "bring my jobs back" is the only thing separating a whole-kind
+   * request from an ordinary edit.
+   *
+   * EVERY asking verb is tried, not the first one. A real instruction said
+   * "Drop the second Kudi Kitchen job bullet and use the space to show Western
+   * Bell International under Experience" — two clauses, and the first verb
+   * ("use") acts on "the space". Reading only that one missed the request
+   * entirely, the entry was never spliced in, and the change log told the
+   * person it had been.
+   */
+  const asksFor = (() => {
+    const found: DroppedEntry[] = [];
+    const verbs = new RegExp(ASKING_BACK.source, 'gi');
+    for (let verb = verbs.exec(words); verb; verb = verbs.exec(words)) {
+      let rest = words.slice(verb.index + verb[0].length);
+      for (let prev = ''; rest !== prev; ) {
+        prev = rest;
+        rest = rest.replace(LEADING_FILLER, '');
+      }
+      for (const d of inOrder) {
+        if (d.name && namedAtStart(rest, d.name) && !found.includes(d)) found.push(d);
+      }
+    }
+    return found;
+  })();
+
+  if (!swap && !ASKING_BACK.test(words)) return null;
+  if (!swap && !BACK.test(words) && !asksFor.length) return null;
 
   /*
    * On a swap, only the incoming half of the sentence is read for names.
