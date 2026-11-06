@@ -123,6 +123,75 @@ export function aboutWhatSurvived(
   return lines.filter((line) => !named(line, left) || named(line, present));
 }
 
+/**
+ * A cited rule number, replaced by what the rule actually says.
+ *
+ * "Removing Kudi goes against rule 4" was in a real change log. Rule 4 sets
+ * that job's TITLE on technical postings and says nothing about keeping the
+ * entry, so the sentence was a refusal justified by a rule that did not
+ * refuse anything — and the number made it unanswerable, because the person
+ * would have to go and count their own rules to find out.
+ *
+ * The prompt asks for the rule's words rather than its number, and has since
+ * before this was observed; it is not holding, which is the usual reason a
+ * thing moves from the prompt into code. Quoting is better than checking the
+ * citation: judging whether a rule really supports a claim is a reading
+ * problem, while showing the sentence it rests on lets the person judge in
+ * the time it takes to read the line.
+ *
+ * A number nothing answers to is dropped rather than quoted — a citation of
+ * a rule that does not exist is noise in a sentence that is otherwise about
+ * their resume. Universal rules are the app's own machinery and mean nothing
+ * to a reader, so those citations go the same way.
+ */
+export function withRulesQuoted(lines: string[], rules: readonly { text: string }[]): string[] {
+  const texts = rules.map((r) => (r?.text ?? '').trim()).filter(Boolean);
+
+  /** The rule in one short phrase, with its own quote marks flattened. */
+  const quote = (text: string) => {
+    const one = text.replace(/\s+/g, ' ').replace(/["“”]/g, "'").trim().replace(/[.]+$/, '');
+    return one.length <= 60 ? one : `${one.slice(0, 57).replace(/[\s,;:]+\S*$/, '')}…`;
+  };
+
+  // The qualifier is only consumed when it is actually there, or the match
+  // swallows the space before it and "against rule 4" becomes "againstyour".
+  const CITED = /\b(?:(your|universal)\s+)?rules?\s*#?(\d+)\b/gi;
+
+  const out: string[] = [];
+  for (const line of lines) {
+    const cites = [...line.matchAll(CITED)];
+    if (!cites.length) {
+      out.push(line);
+      continue;
+    }
+
+    /*
+     * A citation the reader cannot check is dropped with its sentence.
+     *
+     * A universal rule is the app's own machinery and means nothing to
+     * somebody reading their resume; a number past the end of their list is
+     * a citation of nothing. Substituting either leaves a mangled sentence
+     * — "This breaks universal rule 1" became "This." — so the line goes
+     * instead. Nothing true is lost: a line whose only content was an appeal
+     * to a rule that cannot be shown had no content for this reader.
+     */
+    const unusable = cites.some(
+      (m) => (m[1] ?? '').toLowerCase() === 'universal' || !texts[Number(m[2]) - 1],
+    );
+    if (unusable) continue;
+
+    out.push(
+      line
+        .replace(CITED, (_whole, _which, digits: string) => `your rule "${quote(texts[Number(digits) - 1])}"`)
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\s+([.,;:)])/g, '$1')
+        .replace(/\(\s+/g, '(')
+        .trim(),
+    );
+  }
+  return out;
+}
+
 /** The entries a resume actually shows, by the name each answers to. */
 export function entryNames(structure: {
   experience?: unknown;

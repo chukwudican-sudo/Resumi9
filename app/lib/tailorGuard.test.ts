@@ -788,3 +788,100 @@ test('facts the person answered count as their record', () => {
   const without = validateTailored(SOURCE, JSON.parse(JSON.stringify(tailored)));
   assert.equal(/Figma/.test(JSON.stringify(without.structure.skills)), false, 'nothing in the record says Figma');
 });
+
+// ── a skill the tailor left out on purpose ────────────────────────────────
+//
+// Every omission used to be reversed. On a trading-floor posting that meant
+// forcing "Prompt Engineering, Large Language Models (LLMs), Claude, AI
+// Agents" back onto a resume the tailor had deliberately cleared of them, and
+// it is the same mechanism that kept re-adding Excel and PowerPoint to
+// technical roles.
+
+const WIDE: ResumeStructure = {
+  ...SOURCE,
+  skills: [
+    { category: 'Languages', items: 'TypeScript, Java, SQL, Python' },
+    { category: 'AI & Data', items: 'Prompt Engineering, Claude, AI Agents, Data Pipelines' },
+    { category: 'Tools', items: 'Git, Docker, Microsoft Excel, Ms PowerPoint' },
+  ],
+};
+/** What a tailor returns for a job that wants backend engineering. */
+const FOCUSED = {
+  ...WIDE,
+  skills: [
+    { category: 'Languages', items: 'TypeScript, Java, SQL, Python' },
+    { category: 'Tools', items: 'Git, Docker' },
+  ],
+};
+const BACKEND_POSTING = 'Backend engineer. TypeScript, SQL, Docker, Git. Python a plus.';
+
+test('an omission the posting does not ask for stands', () => {
+  const guarded = validateTailored(WIDE, FOCUSED, { posting: BACKEND_POSTING });
+  const written = JSON.stringify(guarded.structure.skills);
+  for (const gone of ['Prompt Engineering', 'Claude', 'AI Agents', 'Microsoft Excel', 'Ms PowerPoint']) {
+    assert.equal(written.includes(gone), false, `${gone} was not asked for and should stay off`);
+  }
+});
+
+test('and is reported as a choice, not as a repair', () => {
+  const guarded = validateTailored(WIDE, FOCUSED, { posting: BACKEND_POSTING });
+  const log = guarded.repairs.map((r) => r.logLine).join('\n');
+  assert.match(log, /left out \d+ terms this posting does not ask for/);
+  assert.match(log, /They stay in your profile/);
+  assert.ok(!/put back/.test(log), 'nothing was put back, so nothing says it was');
+  // And never as something to check before sending: it is not a problem.
+  assert.deepEqual(surfaceRepairs(guarded.repairs).warnings, []);
+});
+
+test('an omission the posting DOES ask for comes back', () => {
+  const dropped = { ...WIDE, skills: [{ category: 'Languages', items: 'TypeScript, Java' }] };
+  const guarded = validateTailored(WIDE, dropped, { posting: 'We need SQL and Docker.' });
+  const written = JSON.stringify(guarded.structure.skills);
+  assert.ok(written.includes('SQL'), 'the posting asked for it');
+  assert.ok(written.includes('Docker'), 'the posting asked for it');
+});
+
+test('an edit still treats every omission as damage', () => {
+  // No posting is passed on the edit path: an edit is a surgical change, not
+  // a selection pass, so a skill vanishing from one is not a choice.
+  const guarded = validateTailored(WIDE, FOCUSED, { sourceLabel: 'the previous version' });
+  const written = JSON.stringify(guarded.structure.skills);
+  for (const back of ['Prompt Engineering', 'Claude', 'Microsoft Excel']) {
+    assert.ok(written.includes(back), `${back} should be put back on an edit`);
+  }
+});
+
+test('a tailoring that kept almost nothing is a failure, not a selection', () => {
+  const collapsed = { ...WIDE, skills: [{ category: 'Languages', items: 'TypeScript' }] };
+  const guarded = validateTailored(WIDE, collapsed, { posting: 'Nothing in common.' });
+  const written = JSON.stringify(guarded.structure.skills);
+  assert.ok(written.includes('Prompt Engineering'), 'one term out of twelve is a malfunction');
+  assert.match(guarded.repairs.map((r) => r.logLine).join('\n'), /put back/);
+});
+
+// ── a gloss is not a different skill ──────────────────────────────────────
+
+test('dropping a parenthetical does not count as dropping the skill', () => {
+  const source = { ...SOURCE, skills: [{ category: 'Tools', items: 'GitHub Actions (CI/CD), Docker' }] };
+  const tailored = { ...source, skills: [{ category: 'Tools', items: 'GitHub Actions, Docker' }] };
+  const guarded = validateTailored(source, tailored, { posting: 'CI/CD and Docker.' });
+  const items = (guarded.structure.skills[0] as { items: string }).items;
+  assert.equal(items.split(',').filter((t) => /GitHub Actions/.test(t)).length, 1, 'listed once, not twice');
+});
+
+test('the fuller spelling is the one printed', () => {
+  const source = { ...SOURCE, skills: [{ category: 'Tools', items: 'GitHub Actions (CI/CD)' }] };
+  const tailored = { ...source, skills: [{ category: 'Tools', items: 'GitHub Actions, GitHub Actions (CI/CD)' }] };
+  const guarded = validateTailored(source, tailored, { posting: 'CI/CD.' });
+  assert.equal((guarded.structure.skills[0] as { items: string }).items, 'GitHub Actions (CI/CD)');
+});
+
+test('a comma inside brackets does not split a term in half', () => {
+  const source = { ...SOURCE, skills: [{ category: 'Cloud', items: 'Cloud Platforms (Vercel, Cloudflare), Docker' }] };
+  const guarded = validateTailored(source, source, { posting: 'Vercel.' });
+  assert.equal(
+    (guarded.structure.skills[0] as { items: string }).items,
+    'Cloud Platforms (Vercel, Cloudflare), Docker',
+    'two terms, not three',
+  );
+});

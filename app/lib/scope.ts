@@ -1,4 +1,5 @@
 import { patternFor, waysOfWriting } from './requirementMatch';
+import { splitTerms } from './names';
 import type { ResumeStructure } from './types';
 
 /**
@@ -108,7 +109,7 @@ export function readScope(instruction: string, structure: ResumeStructure, all =
    */
   const terms: string[] = [];
   for (const group of structure.skills ?? []) {
-    for (const item of String(group?.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
+    for (const item of splitTerms(String(group?.items ?? ''))) {
       if (said(text, item)) terms.push(item);
     }
     const category = (group?.category ?? '').trim();

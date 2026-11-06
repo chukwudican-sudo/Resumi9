@@ -5,6 +5,7 @@ import { saveSectionContent, saveSkills } from '../../server/actions';
 import { useUndo } from '../undo/UndoProvider';
 import { useConfirm } from '../undo/ConfirmProvider';
 import { joinLevel, levelOptions, splitLevel } from '../../lib/proficiency';
+import { splitTerms } from '../../lib/names';
 import SectionHeading from './SectionHeading';
 
 export interface SkillGroup {
@@ -102,7 +103,7 @@ export default function SkillsSection({
    */
   function contentsOf(row: SkillGroup): string[] {
     if (levels) return row.items.trim() ? [row.items.trim()] : [];
-    return row.items.split(',').map((t) => t.trim()).filter(Boolean);
+    return splitTerms(row.items);
   }
 
   /**

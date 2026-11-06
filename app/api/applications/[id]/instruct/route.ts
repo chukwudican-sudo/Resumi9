@@ -4,7 +4,7 @@ import { NoToolUseError, REQUEST_BUDGET_MS, TruncatedError, callClaude } from '.
 import { EDIT_LICENCE, TAILOR_INVARIANT, buildUserContext } from '../../../../lib/systemPrompt';
 import { readInstruction } from '../../../../lib/asked';
 import { pinEntry, readPins, samePin, type Pin } from '../../../../lib/pins';
-import { aboutWhatSurvived, asLines, entryNames, withoutOrderTalk } from '../../../../lib/changeLog';
+import { aboutWhatSurvived, asLines, entryNames, withRulesQuoted, withoutOrderTalk } from '../../../../lib/changeLog';
 import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
@@ -726,6 +726,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           ]
         : [];
 
+    /*
+     * An edit that changed nothing does not become a version.
+     *
+     * Every pass here can decline to act — the guard restores, the scope
+     * holds, the honesty check reverts — and when they all do, what reaches
+     * this point is the previous resume copied byte for byte. It was then
+     * saved under a new number with a change log describing work that is not
+     * on it, which is the "it said it worked and nothing moved" report: the
+     * version counter advanced, a free edit was spent, and the PDF was
+     * identical.
+     *
+     * Saying so costs the person nothing and tells them something true. The
+     * log lines are handed back so the screen can show what the app decided,
+     * since that is usually the explanation.
+     */
+    if (JSON.stringify(fitted) === JSON.stringify(structure)) {
+      const why = [...surfaced.log, ...honest.log, ...(held.frozen.length ? [frozenLine(held.frozen, scope.named)] : [])];
+      console.error('[Resumi9] An edit resolved to no change at all.');
+      return NextResponse.json(
+        {
+          noChange: true,
+          editsLeft: FREE_EDITS - spent,
+          message: 'That left the resume exactly as it was, so no new version was saved.',
+          log: why,
+        },
+        { status: 200 },
+      );
+    }
+
     const requirements = (posting?.requirements as string[]) ?? [];
     const carriedGaps = (current.missingRequirements as string[]) ?? [];
     const gaps = gapsAfterEdit(carriedGaps, fitted, requirements);
@@ -787,12 +816,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          * International entry under Experience, per your request" sat in a
          * log for a version that never contained it.
          */
-        ...quiet(
-          aboutWhatSurvived(
-            withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
-            entryNames(fitted),
-            (refit?.dropped ?? []).map((d) => d.name ?? ''),
+        ...withRulesQuoted(
+          quiet(
+            aboutWhatSurvived(
+              withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
+              entryNames(fitted),
+              (refit?.dropped ?? []).map((d) => d.name ?? ''),
+            ),
           ),
+          rules,
         ),
       ],
       warnings: [
@@ -800,7 +832,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         ...honest.warnings,
         ...(refit?.warnings ?? []),
         ...overLong,
-        ...quiet(asLines(toolInput.warnings)),
+        ...withRulesQuoted(quiet(asLines(toolInput.warnings)), rules),
       ],
       // Carried, not asked for. The model's guess was wrong every time it was
       // checked — "slightly over 1 page" for a resume that filled two — so the

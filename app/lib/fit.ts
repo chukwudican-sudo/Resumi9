@@ -1,3 +1,4 @@
+import { namesEntry, splitTerms } from './names';
 import { missingPins, pinnedOverLine, type Pin } from './pins';
 import type { CutTarget } from './provenance';
 import { patternFor, waysOfWriting } from './requirementMatch';
@@ -349,6 +350,45 @@ function usableCuts(
     return out;
   };
 
+  /*
+   * Which PROJECT to let go of first, by the one signal a project has that a
+   * job does not: its tech line.
+   *
+   * Dropping the oldest is the right default for jobs and the wrong one for
+   * projects, and it was measured wrong. Across this profile's fourteen
+   * applications, the only Python project — "Rate Limit Lab", Python,
+   * FastAPI, pytest — was taken off NINE of the eleven postings that ask for
+   * Python, while MealApp and Resumi stayed. Not because anything judged it
+   * less relevant: it finished in August and the others say Present, so it
+   * sat nearer the end of a date-ordered list and the fitter reached it
+   * first. A Python posting with no Python project on the page is the single
+   * worst outcome this function can produce.
+   *
+   * The argument against scoring entries is in the comment above and it
+   * holds: it was tried on JOBS, where the only text is prose, and prose
+   * overlap is mostly noise. A tech line is not prose. It is a list of tool
+   * names, which is exactly what `weakestLines` already scores skills on, and
+   * for the same reason — it matches exactly or not at all.
+   *
+   * Null where there is nothing to judge on: no posting, or no tech lines at
+   * all. Then the date order stands, as it did before.
+   */
+  const byTech = (() => {
+    const projects = structure.projects ?? [];
+    if (!posting.trim() || !projects.some((p) => String(p?.tech ?? '').trim())) return null;
+    const answers = projects.map((p) => {
+      const terms = splitTerms(String(p?.tech ?? ''));
+      return terms.filter((term) => waysOfWriting(term).some((way) => patternFor(way).test(posting))).length;
+    });
+    // Fewest answers first; ties keep the date order, oldest first.
+    return (left: number[]) => [...left].sort((a, b) => answers[a] - answers[b] || left.indexOf(a) - left.indexOf(b));
+  })();
+
+  const dropOrder = (section: Section) => {
+    const left = weakestFirst(section);
+    return section === 'projects' && byTech ? byTech(left) : left;
+  };
+
   // Bullets, down to the floor. Nothing here can empty an entry.
   for (const section of SECTIONS) {
     for (const i of weakestFirst(section)) {
@@ -397,10 +437,41 @@ function usableCuts(
    * heading printing one bare title line is not a shorter resume, it is a
    * worse one.
    */
+  /*
+   * One venture written up twice gives first.
+   *
+   * A profile can hold the same thing as a job and as a project — somebody
+   * who founded a business and also hand-built its storefront has both, and
+   * both are true. Printed together they spend a third of the page on one
+   * venture: a real resume carried "Kudi Kitchen" under Experience with two
+   * bullets and under Technical Projects with three, while four other
+   * projects had been cut to fit.
+   *
+   * Neither copy is deleted by default — which to keep depends on the
+   * posting, and that is a judgement for the tailor, not arithmetic. But when
+   * the page is over and something has to go, the second write-up of a
+   * venture already on the page costs the reader least: the employer still
+   * learns the person did it. So it is offered before any entry that would
+   * take a whole piece of work off.
+   */
+  const alsoAJob = new Set<number>();
+  for (let p = 0; p < identity.projects.length; p += 1) {
+    const name = (structure.projects ?? [])[p]?.name ?? '';
+    if (!name.trim()) continue;
+    const twice = (structure.experience ?? []).some((job) => job?.org && namesEntry(job.org, name));
+    if (twice && mayDrop('projects', p)) alsoAJob.add(p);
+  }
+  for (const p of [...alsoAJob].sort((a, b) => b - a)) {
+    if (!mayDrop('projects', p)) continue;
+    gone.projects.add(p);
+    usable.push({ section: 'projects', index: p, text: null, name: label.projects[p] });
+  }
+
   for (;;) {
     const options = SECTIONS.map((section) => ({
       section,
-      left: weakestFirst(section).filter((i) => mayDrop(section, i)),
+      // Relevance order for projects, date order for jobs. See dropOrder.
+      left: dropOrder(section).filter((i) => mayDrop(section, i)),
       size: weakestFirst(section).length,
     })).filter((o) => o.left.length > 0);
     if (!options.length) break;
@@ -434,10 +505,7 @@ function weakestLines(
 ): { i: number; answers: number; name: string }[] {
   return (structure.skills ?? [])
     .map((group, i) => {
-      const items = String(group?.items ?? '')
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean);
+      const items = splitTerms(String(group?.items ?? ''));
       // The category name counts too: a line headed "AI & Data" on a posting
       // that says AI all the way through is relevant whatever its items are.
       const wanted = [group?.category ?? '', ...items].filter((t) => t.trim());

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aboutWhatSurvived, asLines, entryNames, mendSplitLines, splitWarnings, storedLines, withoutOrderTalk } from './changeLog';
+import { aboutWhatSurvived, asLines, entryNames, mendSplitLines, splitWarnings, storedLines, withRulesQuoted, withoutOrderTalk } from './changeLog';
 
 // ── asLines ────────────────────────────────────────────────────────────────
 //
@@ -234,4 +234,56 @@ test('the names a resume answers to', () => {
     ['Aegon', 'Droady', 'Resumi', 'Ontario Tech University'],
   );
   assert.deepEqual(entryNames({}), []);
+});
+
+// ── a cited rule number ───────────────────────────────────────────────────
+
+const RULES = [
+  { text: 'Keep the resume one page' },
+  { text: 'Always include the Aegon Wealth Manager experience entry, with at least 2 bullets.' },
+  { text: 'Always include the Droady Software Engineer experience entry, with at least 2 bullets.' },
+  { text: 'On software, data and other technical roles, use "Founder & Web Developer" as the Kudi Kitchen job title. On marketing, content or business roles, use "Founder & Digital Creator".' },
+];
+
+test('a rule number becomes the words of the rule', () => {
+  /*
+   * "Removing Kudi goes against rule 4" was in a real change log. Rule 4
+   * sets that job's title on technical postings and requires nothing — but
+   * the number made the claim unanswerable without counting rules by hand.
+   */
+  const [line] = withRulesQuoted(['Removing Kudi goes against rule 4.'], RULES);
+  assert.match(line, /against your rule "On software, data and other technical roles/);
+  assert.ok(!/rule 4/.test(line));
+});
+
+test('the rule\'s own quote marks do not nest', () => {
+  const [line] = withRulesQuoted(['Used the short title per your rule 4.'], RULES);
+  assert.equal((line.match(/"/g) ?? []).length, 2, 'one pair of quotes, around the rule');
+});
+
+test('two citations in one line both resolve', () => {
+  const [line] = withRulesQuoted(['Kept Aegon (your rule 2) and Droady (your rule 3).'], RULES);
+  assert.match(line, /Aegon \(your rule "Always include the Aegon/);
+  assert.match(line, /Droady \(your rule "Always include the Droady/);
+  assert.ok(!/\(\s/.test(line), 'no stray space after the bracket');
+});
+
+test('a universal rule takes its line with it', () => {
+  // The app's own machinery, which means nothing to somebody reading their
+  // resume — and substituting left "This." behind.
+  assert.deepEqual(withRulesQuoted(['This breaks universal rule 1.'], RULES), []);
+});
+
+test('a rule that does not exist takes its line with it', () => {
+  assert.deepEqual(withRulesQuoted(['Cited rule 9, which does not exist.'], RULES), []);
+});
+
+test('a line citing nothing is untouched', () => {
+  const lines = ['Shortened the Aegon bullets.', 'Dropped 1 role to fit one page.'];
+  assert.deepEqual(withRulesQuoted(lines, RULES), lines);
+});
+
+test('no rules at all drops every citation line rather than guessing', () => {
+  assert.deepEqual(withRulesQuoted(['Kept Aegon per your rule 2.'], []), []);
+  assert.deepEqual(withRulesQuoted(['Shortened the Aegon bullets.'], []), ['Shortened the Aegon bullets.']);
 });

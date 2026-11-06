@@ -17,7 +17,7 @@ import {
   flagsFromVerdicts,
   type ClaimVerdict,
 } from '../../../../lib/claimCheck';
-import { aboutWhatSurvived, asLines, entryNames } from '../../../../lib/changeLog';
+import { aboutWhatSurvived, asLines, entryNames, withRulesQuoted } from '../../../../lib/changeLog';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
@@ -303,6 +303,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // Their answered facts are part of their record, so a skill one of them
       // names is theirs to list. Figma was in the facts and in no skills line.
       alsoSaid: supporting.map((fact) => fact.text).join(' \n '),
+      // So a skill the tailor left out can be judged on whether this posting
+      // wanted it, instead of every omission being reversed on principle.
+      posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
     });
     const surfaced = surfaceRepairs(guarded.repairs);
 
@@ -442,13 +445,30 @@ export async function POST(_request: Request, { params }: { params: { id: string
          * above "Dropped 1 role to fit one page: WesternBell International
          * Ltd." and leave somebody hunting for a bullet that is not there.
          */
-        ...aboutWhatSurvived(
-          withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
-          entryNames(fitted.structure),
-          fitted.dropped.map((d) => d.name ?? ''),
+        /*
+         * A cited rule number becomes the rule's own words, or the line goes.
+         *
+         * "Removing Kudi goes against rule 4" is unanswerable as written —
+         * the person would have to count their own rules to check it, and
+         * that rule turned out to set a job title rather than require an
+         * entry. The prompt has asked for the words instead of the number
+         * since before that was observed.
+         */
+        ...withRulesQuoted(
+          aboutWhatSurvived(
+            withoutUndoneClaims(asLines(toolInput.log), guarded.restored),
+            entryNames(fitted.structure),
+            fitted.dropped.map((d) => d.name ?? ''),
+          ),
+          rules,
         ),
       ],
-      warnings: [...surfaced.warnings, ...honest.warnings, ...fitted.warnings, ...asLines(toolInput.warnings)],
+      warnings: [
+        ...surfaced.warnings,
+        ...honest.warnings,
+        ...fitted.warnings,
+        ...withRulesQuoted(asLines(toolInput.warnings), rules),
+      ],
       // The column exists and nothing has ever read it back, so the model is
       // no longer asked to produce a number for it. `pageCount` is the real
       // one, and the only one anything reads.

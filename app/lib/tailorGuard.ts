@@ -1,6 +1,7 @@
 import { NOTHING_ASKED, type Asked } from './asked';
 import { parseDates } from './entryFormat';
 import { patternFor, waysOfWriting } from './requirementMatch';
+import { splitTerms, withoutAside } from './names';
 import type { ResumeStructure } from './types';
 
 /**
@@ -423,6 +424,14 @@ export function validateTailored(
      * inventing. Absent means the structure alone is the vocabulary.
      */
     alsoSaid?: string;
+    /**
+     * The posting, for deciding whether a skill the tailor left out mattered.
+     *
+     * Absent means every omission is treated as worth putting back, which is
+     * how this behaved before and is the safe reading when there is nothing
+     * to judge relevance against.
+     */
+    posting?: string;
   } = {},
 ): TailorGuardResult {
   const repairs: Repair[] = [];
@@ -633,7 +642,8 @@ export function validateTailored(
    * uses, so "C++" is found, "Go" is not found inside "Google", and a term
    * inside a combined item counts as present.
    */
-  const splitTerms = (items: string) => items.split(',').map((t) => t.trim()).filter(Boolean);
+  // Shared, and bracket-aware: a comma inside "(Vercel, Cloudflare)" does not
+  // end a term. See names.ts — this was written out by hand in eleven places.
 
   /**
    * The line a source group was renamed to, judged by what is still on it.
@@ -659,8 +669,18 @@ export function validateTailored(
     return best?.group ?? null;
   };
   const written = outSkills.map((g) => g.items).join(', ');
+  /*
+   * Whether the tailored lines still list this skill, gloss or no gloss.
+   *
+   * "GitHub Actions (CI/CD)" written back as "GitHub Actions" is the same
+   * skill with its parenthetical dropped, and an exact test read it as
+   * missing — so the full original was appended alongside, and the resume
+   * printed "GitHub Actions" and "GitHub Actions (CI/CD)" on one line.
+   */
   const stillThere = (term: string) =>
-    waysOfWriting(term).some((way) => patternFor(way).test(written));
+    [term, withoutAside(term)]
+      .filter(Boolean)
+      .some((form) => waysOfWriting(form).some((way) => patternFor(way).test(written)));
 
   /*
    * A skill they have never claimed, taken off.
@@ -725,6 +745,36 @@ export function validateTailored(
   const skills = outSkills.length ? outSkills.map((g) => ({ ...g })) : srcSkills.map((g) => ({ ...g }));
   const lostTerms: string[] = [];
   const droppedTerms: string[] = [];
+  const setAside: string[] = [];
+
+  /*
+   * How much of the person's skills vocabulary survived the tailoring.
+   *
+   * The difference between an editorial choice and a malfunction. Choosing
+   * which skills to lead with for a posting IS the tailor's job, and a guard
+   * that reverses every omission is not protecting anybody — it is overruling
+   * the thing it is guarding. But a pass that returns four terms out of fifty
+   * has not made a choice, it has failed, and that is the case this was
+   * written for: a real run lost "Ms PowerPoint" with no reason to.
+   *
+   * The bar is deliberately low, because it is not the main protection. A
+   * term the posting actually asks for comes back whatever this says, so the
+   * only thing riding on it is what happens to terms nobody wanted — and
+   * dropping half of those is a defensible edit, where keeping a quarter of
+   * somebody's vocabulary is not a resume for this job, it is a failure.
+   */
+  const everyTerm = srcSkills.flatMap((g) => splitTerms(asText(g.items))).filter((t) => norm(t));
+  const survived = everyTerm.filter((t) => stillThere(t)).length;
+  const malfunctioned = everyTerm.length >= 8 && survived < everyTerm.length * 0.25;
+
+  /** Whether this posting asks for the thing, in any of its spellings. */
+  const wanted = (term: string) => {
+    const against = options.posting ?? '';
+    if (!against.trim()) return true;
+    return [term, withoutAside(term)]
+      .filter(Boolean)
+      .some((form) => waysOfWriting(form).some((way) => patternFor(way).test(against)));
+  };
 
   if (outSkills.length) {
     // Group by group, so a term goes home rather than to the end. Regrouping is
@@ -740,7 +790,26 @@ export function validateTailored(
        */
       const licensed = gone.filter((term) => asked.removesSkill(term));
       droppedTerms.push(...licensed);
-      const missing = gone.filter((term) => !asked.removesSkill(term));
+      const unlicensed = gone.filter((term) => !asked.removesSkill(term));
+
+      /*
+       * A term the tailor left out, left out.
+       *
+       * Every omission used to come back, and on a trading-floor posting that
+       * meant forcing "Prompt Engineering, Large Language Models (LLMs),
+       * Claude, AI Agents" onto a resume the tailor had deliberately cleared
+       * of them — six terms, named in the change log as having been "put
+       * back", filling a section on the page the fitter is always short of.
+       * The same mechanism kept re-adding Excel, PowerPoint and Microsoft 365
+       * to technical roles.
+       *
+       * So an omission stands unless keeping it mattered: the posting asks
+       * for the term by name, or the tailoring dropped so much of the
+       * vocabulary that it was not selecting at all. The rest is reported as
+       * a choice rather than a repair, because it is one.
+       */
+      const missing = malfunctioned ? unlicensed : unlicensed.filter((term) => wanted(term));
+      setAside.push(...unlicensed.filter((term) => !missing.includes(term)));
       if (!missing.length) continue;
       lostTerms.push(...missing);
       /*
@@ -774,23 +843,45 @@ export function validateTailored(
    * whole page as careless, and a repair that appends can always collide with
    * something a regroup moved.
    *
-   * First occurrence wins, so the tailor's ordering survives. Exact matches
-   * only — "Vercel" and "Cloud Platforms (Vercel, Cloudflare)" are the same
-   * tool written twice, and judging that is not something to guess at: that
-   * pair is in the person's own profile, where it belongs to them.
+   * First occurrence wins, so the tailor's ordering survives.
+   *
+   * A gloss counts as the same term: "GitHub Actions" beside "GitHub Actions
+   * (CI/CD)" is one skill printed twice, which is exactly what the put-back
+   * produced before `stillThere` learned to look past a bracket. The longer
+   * spelling is the one kept, because it is the person's own.
+   *
+   * Still NOT matched: "Vercel" against "Cloud Platforms (Vercel,
+   * Cloudflare)". One term listing another inside it is a judgement about
+   * what a line means, and that pair is in the person's own profile, where it
+   * belongs to them.
    */
   const withoutRepeats = (groups: ResumeStructure['skills']) => {
-    const seen = new Set<string>();
+    const key = (item: string) => norm(withoutAside(item)) || norm(item);
+
+    // The spelling to print for each term: the longest one written anywhere,
+    // so a gloss survives wherever the tailor happened to put the short form.
+    const fullest = new Map<string, string>();
+    for (const group of groups) {
+      for (const item of splitTerms(asText(group.items))) {
+        const k = key(item);
+        if (!k) continue;
+        const best = fullest.get(k);
+        if (!best || item.length > best.length) fullest.set(k, item);
+      }
+    }
+
+    const printed = new Set<string>();
     return groups
       .map((group) => ({
         ...group,
         items: splitTerms(asText(group.items))
-          .filter((item) => {
-            const key = norm(item);
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
+          .map((item) => {
+            const k = key(item);
+            if (!k || printed.has(k)) return '';
+            printed.add(k);
+            return fullest.get(k) ?? item;
           })
+          .filter(Boolean)
           .join(', '),
       }))
       .filter((group) => group.items.trim());
@@ -813,6 +904,25 @@ export function validateTailored(
       kind: 'skill',
       message: `${lostTerms.length} of your skills were missing from the tailored version and have been put back.`,
       logLine: `Skills: put back ${lostTerms.length} ${lostTerms.length === 1 ? 'term' : 'terms'} the tailoring dropped — ${lostTerms.join(', ')}.`,
+    });
+  }
+
+  /*
+   * Skills left out on purpose, reported as a choice rather than reversed.
+   *
+   * These used to be forced back onto the page with a line saying they had
+   * been "put back", which was the app overruling the selection it had just
+   * asked for. They are still the person's skills and still in their profile;
+   * they are not on THIS resume, and the log says so plainly so nobody has to
+   * compare two versions to find out.
+   */
+  if (setAside.length) {
+    repairs.push({
+      kind: 'skill',
+      message: '',
+      logLine:
+        `Skills: left out ${setAside.length} ${setAside.length === 1 ? 'term' : 'terms'} this posting does not ask for — ` +
+        `${setAside.join(', ')}. They stay in your profile.`,
     });
   }
 
@@ -988,7 +1098,12 @@ export function surfaceRepairs(repairs: Repair[]): { warnings: string[]; log: st
   return {
     // `asked` joins `skill` in the log only: the guard standing down because
     // somebody asked it to is not something to check before sending.
-    warnings: repairs.filter((r) => r.kind !== 'skill' && r.kind !== 'asked').map((r) => r.message),
+    // A repair with no message is log-only by design — a deliberate omission
+    // is worth recording and is not something to check before sending.
+    warnings: repairs
+      .filter((r) => r.kind !== 'skill' && r.kind !== 'asked')
+      .map((r) => r.message)
+      .filter(Boolean),
     log: repairs.map((r) => r.logLine),
   };
 }

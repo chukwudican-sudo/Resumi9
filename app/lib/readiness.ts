@@ -1,4 +1,5 @@
 import type { ResumeStructure } from './types';
+import { splitTerms, withoutAside } from './names';
 import { contentFor, planSections } from './sections';
 
 /**
@@ -96,9 +97,13 @@ export function postingReadyToTailor(posting: {
 
 /** A skill entry that reads as a sentence rather than a term. */
 function readsAsProse(items: string): boolean {
-  return items
-    .split(',')
-    .some((item) => /\b(uses?|has|have|considers?|backed by|across|most)\b/i.test(item) || item.trim().split(/\s+/).length > 6);
+  return splitTerms(items).some(
+    (item) =>
+      /\b(uses?|has|have|considers?|backed by|across|most)\b/i.test(item) ||
+      // Counted without the bracketed gloss: "Cloud Platforms (Vercel,
+      // Cloudflare)" is one term with an aside, not a sentence.
+      withoutAside(item).trim().split(/\s+/).length > 6,
+  );
 }
 
 export function checkReadiness(structure: ResumeStructure): Readiness {

@@ -984,3 +984,86 @@ test('a resume that is also over the page keeps both accounts', async () => {
   assert.match(result.log[0] ?? '', /Technical Skills was 6 lines/);
   assert.ok(result.log.some((l) => /to fit one page/.test(l)), `log was ${JSON.stringify(result.log)}`);
 });
+
+// ── which project gives first ─────────────────────────────────────────────
+
+test('the project whose tech the posting does not ask for goes first', async () => {
+  /*
+   * Measured on fourteen real applications: the only Python project was
+   * taken off NINE of the eleven postings that ask for Python, because it
+   * finished in August while the others say Present — so it sat nearer the
+   * end of a date-ordered list and the fitter reached it first.
+   */
+  const threeProjects: ResumeStructure = {
+    ...RESUME,
+    projects: [
+      { name: 'Resumi', tech: 'Next.js, TypeScript', dates: 'Jun 2026 – Present', bullets: ['a', 'b'] },
+      { name: 'MealApp', tech: 'React Native, Expo', dates: 'May 2026 – Present', bullets: ['c', 'd'] },
+      { name: 'Rate Limit Lab', tech: 'Python, FastAPI, pytest', dates: 'Jul 2026 – Aug 2026', bullets: ['e', 'f'] },
+    ],
+  };
+  // 24 lines; trimming to the bullet floor reaches 20, and one page is 16 —
+  // so exactly one project has to go, which is the choice under test.
+  const meter = byLines(16);
+  const result = await fitToPages(threeProjects, {
+    target: 1,
+    cuts: [],
+    posting: 'Backend engineer. Python and FastAPI. pytest for testing.',
+    measure: meter.measure,
+    affords: always,
+  });
+  const names = result.structure.projects.map((p) => p.name);
+  assert.ok(names.includes('Rate Limit Lab'), `the Python project should survive a Python posting: kept ${names.join(', ')}`);
+});
+
+test('with nothing to judge on, the date order still decides', async () => {
+  // No posting, so there is no relevance signal and the old behaviour stands.
+  const meter = byLines(16);
+  const result = await fitToPages(
+    { ...RESUME, projects: [
+      { name: 'Newest', tech: 'Go', dates: 'Jun 2026 – Present', bullets: ['a', 'b'] },
+      { name: 'Middle', tech: 'Rust', dates: 'May 2026', bullets: ['c', 'd'] },
+      { name: 'Oldest', tech: 'C', dates: 'Jan 2024', bullets: ['e', 'f'] },
+    ] },
+    { target: 1, cuts: [], posting: '', measure: meter.measure, affords: always },
+  );
+  const names = result.structure.projects.map((p) => p.name);
+  assert.ok(!names.includes('Oldest'), `the oldest gives first when nothing else is known: kept ${names.join(', ')}`);
+});
+
+// ── one venture written up twice ──────────────────────────────────────────
+
+test('a project duplicating a job gives before an unrelated project', async () => {
+  /*
+   * A real resume carried "Kudi Kitchen" under Experience with two bullets
+   * and under Technical Projects with three, while four other projects had
+   * been cut to fit. Neither copy is deleted by default — but when something
+   * has to go, the second write-up of a venture already on the page costs
+   * the reader least.
+   */
+  const twice: ResumeStructure = {
+    ...RESUME,
+    projects: [
+      { name: 'Kudi Kitchen', tech: 'HTML, CSS', dates: '2026', bullets: ['a', 'b'] },
+      { name: 'FraudWatch', tech: 'Java', dates: 'Aug 2026', bullets: ['c', 'd'] },
+      { name: 'MealApp', tech: 'React', dates: 'Feb 2025', bullets: ['e', 'f'] },
+    ],
+  };
+  const meter = byLines(16);
+  const result = await fitToPages(twice, {
+    target: 1,
+    cuts: [],
+    posting: 'Frontend work in HTML and CSS.',
+    measure: meter.measure,
+    affords: always,
+  });
+  const names = result.structure.projects.map((p) => p.name);
+  assert.ok(
+    !names.includes('Kudi Kitchen'),
+    `the duplicate should give first even though the posting names its tech: kept ${names.join(', ')}`,
+  );
+  assert.ok(
+    result.structure.experience.some((e) => e.org === 'Kudi Kitchen'),
+    'and the job itself is untouched — the venture is still on the page',
+  );
+});

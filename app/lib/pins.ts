@@ -1,4 +1,5 @@
 import { clausesSaying } from './clauses';
+import { splitTerms } from './names';
 import { patternFor, waysOfWriting } from './requirementMatch';
 import type { ResumeStructure } from './types';
 
@@ -117,7 +118,7 @@ function textsIn(structure: ResumeStructure, place: PinPlace): string[] {
     case 'skills':
       return (structure.skills ?? []).flatMap((g) => [
         g.category ?? '',
-        ...String(g.items ?? '').split(',').map((t) => t.trim()),
+        ...splitTerms(String(g.items ?? '')),
       ]).filter(Boolean);
     case 'bullet':
       return [
@@ -254,7 +255,7 @@ function whatItNames(name: string, structure: ResumeStructure): Pin[] {
   for (const group of structure.skills ?? []) {
     const category = (group.category ?? '').trim();
     if (category && named(name, category)) found.push({ place: 'skills', text: category, label: `the ${category} line` });
-    for (const item of String(group.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
+    for (const item of splitTerms(String(group.items ?? ''))) {
       if (waysOfWriting(item).some((way) => patternFor(way).test(name))) {
         found.push({ place: 'skills', text: item, label: item });
       }
@@ -403,7 +404,7 @@ export function readPins(instruction: string, structure: ResumeStructure): Pin[]
   for (const group of structure.skills ?? []) {
     const category = (group.category ?? '').trim();
     if (category && named(promise, category)) add({ place: 'skills', text: category, label: `the ${category} line` });
-    for (const item of String(group.items ?? '').split(',').map((t) => t.trim()).filter(Boolean)) {
+    for (const item of splitTerms(String(group.items ?? ''))) {
       if (waysOfWriting(item).some((way) => patternFor(way).test(promise))) {
         add({ place: 'skills', text: item, label: item });
       }

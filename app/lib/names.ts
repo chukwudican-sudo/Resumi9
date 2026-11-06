@@ -173,6 +173,49 @@ export function namedAtStart(text: string, name: string): boolean {
 }
 
 /**
+ * One skills line, split into the terms it lists.
+ *
+ * A comma inside brackets does not end a term. `"Cloud Platforms (Vercel,
+ * Cloudflare)"` split naively becomes `"Cloud Platforms (Vercel"` and
+ * `"Cloudflare)"` — two halves that match nothing in the person's record, so
+ * the guard reads both as invented, takes them off, and then puts the whole
+ * original back somewhere else.
+ *
+ * This existed eleven times across the app, written out by hand each time and
+ * naive in all eleven. Nobody had hit it yet because the profiles in use spell
+ * their one bracketed term with a slash — "GitHub Actions (CI/CD)".
+ */
+export function splitTerms(items: string): string[] {
+  const text = items ?? '';
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '(' || c === '[') depth += 1;
+    else if (c === ')' || c === ']') depth = Math.max(0, depth - 1);
+    else if (c === ',' && depth === 0) {
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(text.slice(start));
+  return out.map((t) => t.trim()).filter(Boolean);
+}
+
+/**
+ * A term with any bracketed aside removed: "GitHub Actions (CI/CD)" → "GitHub
+ * Actions".
+ *
+ * What a term is really called, for deciding whether a line still lists it
+ * after the tailor has rewritten the line. The bracket is a gloss, and a
+ * tailor that drops the gloss has not dropped the skill.
+ */
+export function withoutAside(term: string): string {
+  return (term ?? '').replace(/\s*[([][^)\]]*[)\]]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Which stored name a sentence names, or null.
  *
  * For the callers that have a list and need the one that was meant. The

@@ -148,6 +148,24 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
         return;
       }
 
+      /*
+       * Nothing moved, and the app says so instead of pretending.
+       *
+       * Every pass can decline to act, and when they all do the result is the
+       * previous resume byte for byte. That used to be saved as a new
+       * version: the number went up, a free edit was spent, and the PDF was
+       * identical — reported as "it said it worked and nothing changed".
+       *
+       * No refresh, because there is nothing new to fetch, and the sentence
+       * stays in the box so it can be reworded rather than retyped.
+       */
+      if (data?.noChange) {
+        const why = Array.isArray(data.log) && data.log.length ? ` ${data.log.join(' ')}` : '';
+        setError(`${data.message ?? 'Nothing changed.'}${why}`);
+        setAsking(null);
+        return;
+      }
+
       setAsking(null);
       setInstruction('');
       // Only when the app actually held something back, and never on the
@@ -484,7 +502,17 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
             )}
           </div>
 
-          <aside className="order-2 flex min-h-0 flex-col border-t border-rule bg-ground-surface lg:order-none lg:border-l lg:border-t-0">
+          {/*
+            The column you act in sits above the one you read.
+
+            Reported as the preview canvas covering Apply at about 858px
+            wide. I could not reproduce it — below 1024px this grid is a
+            single column and the two stack — so this is not a fix for a
+            diagnosed overlap, it is making one impossible: the panel holding
+            every control gets its own stacking context, so nothing drawn in
+            the preview can land on top of a button whatever the width.
+          */}
+          <aside className="relative z-10 order-2 flex min-h-0 flex-col border-t border-rule bg-ground-surface lg:order-none lg:border-l lg:border-t-0">
             <div className="flex shrink-0 gap-6 border-b border-rule px-6">
               {(['review', 'posting'] as const).map((t) => (
                 <button
@@ -849,11 +877,35 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                     <span className="text-[11.5px] text-ink-muted">
                       {editsLeft === null ? 'Free · 10 per tailor' : `Free · ${editsLeft} left`}
                     </span>
+                    {/*
+                      Empty box: still clickable, and it says why.
+
+                      This was disabled with `pointer-events-none` whenever
+                      the box was empty, so a click on it did nothing at all
+                      — no press, no message, not even a cursor change — and
+                      came back as "clicking Apply silently does nothing, no
+                      error, no request sent". A control that refuses has to
+                      say so; refusing in silence is indistinguishable from
+                      being broken, and the person has no way to tell which.
+
+                      Still properly disabled while something is running,
+                      where the button is not refusing but busy and the label
+                      already says so.
+                    */}
                     <button
                       type="button"
-                      onClick={() => applyInstruction()}
-                      disabled={editing || busy || !instruction.trim()}
-                      className="rounded bg-accent px-4 py-2 text-[13px] font-medium text-ground transition hover:bg-accent-hover disabled:pointer-events-none disabled:bg-rule-field disabled:text-ink-ghost"
+                      onClick={() =>
+                        instruction.trim()
+                          ? applyInstruction()
+                          : setError('Say what you would like changed, then press Apply.')
+                      }
+                      disabled={editing || busy}
+                      aria-disabled={!instruction.trim()}
+                      className={`rounded px-4 py-2 text-[13px] font-medium transition disabled:pointer-events-none disabled:bg-rule-field disabled:text-ink-ghost ${
+                        instruction.trim()
+                          ? 'bg-accent text-ground hover:bg-accent-hover'
+                          : 'bg-rule-field text-ink-muted hover:bg-rule-field'
+                      }`}
                     >
                       {editing ? 'Applying…' : asking ? 'Answer' : 'Apply'}
                     </button>

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { namedAtStart, namesEntry, spanFor, squash, waysOfNaming, whichNamed } from './names';
+import { namedAtStart, namesEntry, spanFor, splitTerms, squash, waysOfNaming, whichNamed, withoutAside } from './names';
 
 /*
  * The sentences in here are real ones, from the 6 Nov run on the Scotiabank
@@ -113,4 +113,35 @@ test('nothing named is null, not a guess', () => {
 test('squash is punctuation-blind and case-blind', () => {
   assert.equal(squash('Western Bell International Ltd.'), 'westernbellinternationalltd');
   assert.equal(squash('R & D'), 'randd');
+});
+
+// ── splitting a skills line ───────────────────────────────────────────────
+
+test('a comma inside brackets does not end a term', () => {
+  // Latent in eleven hand-written copies of this before it was shared.
+  assert.deepEqual(splitTerms('Cloud Platforms (Vercel, Cloudflare), Docker'), [
+    'Cloud Platforms (Vercel, Cloudflare)',
+    'Docker',
+  ]);
+  assert.deepEqual(splitTerms('GitHub Actions (CI/CD), pytest, Docker'), [
+    'GitHub Actions (CI/CD)',
+    'pytest',
+    'Docker',
+  ]);
+});
+
+test('an ordinary line splits the ordinary way', () => {
+  assert.deepEqual(splitTerms('JavaScript, TypeScript, Python'), ['JavaScript', 'TypeScript', 'Python']);
+  assert.deepEqual(splitTerms(''), []);
+  assert.deepEqual(splitTerms('  ,  , Docker ,'), ['Docker']);
+});
+
+test('an unclosed bracket does not swallow the rest of the line', () => {
+  assert.deepEqual(splitTerms('Broken (one, two'), ['Broken (one, two']);
+});
+
+test('a gloss comes off for comparison but not from the text', () => {
+  assert.equal(withoutAside('GitHub Actions (CI/CD)'), 'GitHub Actions');
+  assert.equal(withoutAside('React Native (Expo)'), 'React Native');
+  assert.equal(withoutAside('Docker'), 'Docker');
 });

@@ -1,4 +1,4 @@
-import { buildDefaultFilenameBase } from '../lib/filename';
+import { buildDefaultFilenameBase, withVersion } from '../lib/filename';
 import type { ResumeStructure } from '../lib/types';
 import { getApplication, getLatestResume, getProfile, getResumeVersion } from './db/repository';
 
@@ -49,10 +49,19 @@ export async function resolveResume(
     return {
       ok: true,
       structure,
-      filename: `${buildDefaultFilenameBase(
-        structure.name ?? '',
-        record.posting?.role ?? '',
-        record.posting?.company ?? '',
+      /*
+       * The version is in the name from the second one on, so a folder of
+       * downloads from one application can be told apart. Before this every
+       * download of every version arrived as the same name and the browser
+       * numbered them in download order.
+       */
+      filename: `${withVersion(
+        buildDefaultFilenameBase(
+          structure.name ?? '',
+          record.posting?.role ?? '',
+          record.posting?.company ?? '',
+        ),
+        resume.version as number | null,
       )}.pdf`,
     };
   }

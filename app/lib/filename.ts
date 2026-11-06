@@ -87,6 +87,41 @@ export function buildDefaultFilenameBase(userName: string, role: string, company
   return [namePart, 'Resume'].join('_').slice(0, FILENAME_MAX_BASE_LENGTH);
 }
 
+/**
+ * The version, on every download after the first.
+ *
+ * The rule above says no version numbers, and it was written about dates and
+ * build stamps — the noise that makes a filename look machine-generated. It
+ * did not anticipate that one application produces a dozen downloads: every
+ * one arrived as the same name, so a folder filled with
+ * `…_Resume.pdf`, `…_Resume (1).pdf`, `…_Resume (2).pdf`, numbered by the
+ * browser in download order with no relation to the version, and there was no
+ * way to tell which one was the resume that got sent.
+ *
+ * Version 1 is left bare, because the common case is one download and a `_v1`
+ * on it reads as a draft. From the second version on, the number is the
+ * person's own and matches what the app shows beside the preview.
+ *
+ * Counted inside the length limit: the suffix is what makes the name useful,
+ * so the role gives way to it rather than the other way round.
+ */
+export function withVersion(base: string, version: number | null | undefined): string {
+  if (!Number.isFinite(version) || (version as number) < 2) return base;
+  const suffix = `_v${Math.floor(version as number)}`;
+  const room = FILENAME_MAX_BASE_LENGTH - suffix.length;
+  /*
+   * Trimmed back to a whole word, never mid-word: the whole point of the
+   * shortening above is that a filename never shows half a word.
+   */
+  if (base.length <= room) return `${base}${suffix}`;
+  const parts = base.split('_');
+  for (let keep = parts.length; keep >= 1; keep -= 1) {
+    const shorter = parts.slice(0, keep).join('_');
+    if (shorter.length <= room) return `${shorter}${suffix}`;
+  }
+  return `${parts[0].slice(0, Math.max(1, room))}${suffix}`;
+}
+
 /** Live-sanitizes user input in the editable filename field (base name only, no ".pdf"). */
 export function sanitizeFilenameInput(value: string): string {
   return value
