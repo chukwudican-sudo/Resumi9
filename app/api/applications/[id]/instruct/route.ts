@@ -9,7 +9,7 @@ import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
 import { couldComeBack, readRestore, restoreLine, withRestored, type Restore } from '../../../../lib/restore';
-import { fitToPages, type DroppedEntry } from '../../../../lib/fit';
+import { MAX_SKILL_LINES, cappedSkills, fitToPages, type DroppedEntry } from '../../../../lib/fit';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
@@ -31,7 +31,7 @@ import {
 } from '../../../../server/db/repository';
 import { capacityResponse, INSTRUCT_TOOL, errorResponse, SERVICE_UNAVAILABLE } from '../../../claude/shared';
 import { annotate, resolveTailored, unreadable } from '../../../../lib/provenance';
-import { applyFlags, checkBullets } from '../../../../lib/honesty';
+import { applyFlags, checkBullets, wholeRecord } from '../../../../lib/honesty';
 
 // Kept in step with MAX_DURATION_S by a test; Next.js needs a literal here.
 export const maxDuration = 120;
@@ -154,6 +154,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const structure = current.structure as ResumeStructure;
   const profileStructure = (profile?.resumeStructure ?? null) as ResumeStructure | null;
   const posting = record.posting;
+  /** The posting as one string, for everything that scores relevance against it. */
+  const postingText = [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n ');
 
   /*
    * What this sentence promises to keep, added to what the application already
@@ -284,7 +286,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
       ),
       cuts: [],
-      posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+      posting: postingText,
       pinned: pins,
       measure: async (candidate: ResumeStructure) => {
         try {
@@ -586,7 +588,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       (posting?.requirements as string[]) ?? [],
       asked,
       'the previous version',
-      [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+      postingText,
+      /*
+       * Their record is the version on screen plus everything behind it.
+       *
+       * The profile too, not only the resume being edited: a word the fitter
+       * took off this page is still the person's own, and reverting a bullet
+       * for using it would punish them for a cut the app made.
+       */
+      wholeRecord(structure, [
+        wholeRecord(profileStructure ?? {}),
+        ...supporting.map((fact) => fact.text),
+      ]),
     );
     const honest = applyFlags(resolved.structure, flags, 'the previous version');
 
@@ -717,13 +730,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ? await fitToPages(edited, {
           target,
           cuts: [],
-          posting: [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n '),
+          posting: postingText,
           pinned: alsoPinned(restore.entries.map((e) => pinEntry(e.section, e.name))),
           measure,
           affords: () => affords(deadline, COMPILE_ESTIMATE_MS),
         })
       : null;
-    const fitted = refit?.structure ?? edited;
+    /*
+     * The skills cap holds on an edit too.
+     *
+     * The fitter runs here only when something was restored, because
+     * refitting every edit would let a sentence about wording quietly cost an
+     * entry — and the cap lives inside the fitter. So "add a Design &
+     * Research skills group" left the section at six lines against a rule
+     * asking for five, and nothing anywhere brought it back.
+     *
+     * Safe to run on every edit in a way a full refit is not: it only ever
+     * drops a skills LINE, never an entry or a bullet, and it skips any line
+     * the person asked to keep.
+     */
+    const refitted = refit?.structure ?? edited;
+    const capped = refit ? null : cappedSkills(refitted, postingText, pins);
+    const fitted = capped?.structure ?? refitted;
     const pages = refit ? refit.pages : affords(deadline, COMPILE_ESTIMATE_MS) ? await measure(edited) : null;
     /*
      * Over the limit, and nothing taken off to get under it.
@@ -812,6 +840,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          * what actually went.
          */
         ...(restore ? [restoreLine(restore.entries), ...(refit?.log ?? [])] : []),
+        // A line the cap took off, said out loud: a section quietly losing a
+        // row is the kind of change somebody finds in the PDF days later.
+        ...(capped?.dropped.length
+          ? [
+              `Technical Skills was ${capped.dropped.length + MAX_SKILL_LINES} lines; your rules ask for ` +
+                `${MAX_SKILL_LINES} or fewer, so ${capped.dropped.join(', ')} went — ` +
+                `${capped.dropped.length === 1 ? 'the line' : 'the lines'} this posting mentions least.`,
+            ]
+          : []),
         ...(move ? [moveLine(move), ORDER_IS_LOCAL] : []),
         // What the edit was held to, and how to ask for it everywhere.
         ...(held.frozen.length ? [frozenLine(held.frozen, scope.named)] : []),

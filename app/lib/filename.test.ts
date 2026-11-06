@@ -84,3 +84,33 @@ test('a dropped word goes whole', () => {
     assert.ok(base.split('_').includes(piece), `"${piece}" is not a whole word from the original`);
   }
 });
+
+test('a company name is not cut down to a different company', () => {
+  /*
+   * Shipped as "..._AIEngineerIntern_Electronic_Resume". "Arts" is not a
+   * qualifier, it is half the name — dropping it names a different employer.
+   * Never cutting a word in half was necessary and not sufficient.
+   */
+  const base = buildDefaultFilenameBase('Chukwudi Alex', 'AI Engineer Intern', 'Electronic Arts');
+  assert.match(base, /ElectronicArts/, `"${base}" lost half the company name`);
+  assert.ok(base.length <= FILENAME_MAX_BASE_LENGTH);
+});
+
+test('a company qualifier may still go', () => {
+  // "Celestica International LP" is Celestica; those two words every company has.
+  const base = buildDefaultFilenameBase('Chukwudi Alex', 'Software Engineering Student', 'Celestica International LP');
+  assert.match(base, /_Celestica_/);
+  assert.ok(base.length <= FILENAME_MAX_BASE_LENGTH);
+});
+
+test('the typed filename field trims to a word too', () => {
+  // It cut at exactly fifty wherever that landed: "..._ElectronicArts_Resu".
+  const out = sanitizeFilenameInput('Chukwudi_Alex_AIEngineerIntern_ElectronicArts_Resume');
+  assert.ok(out.length <= FILENAME_MAX_BASE_LENGTH);
+  assert.ok(!/_Resu$/.test(out), `"${out}" ends mid-word`);
+  assert.ok(!out.endsWith('_'), 'and not on a bare separator');
+});
+
+test('a short typed name is untouched', () => {
+  assert.equal(sanitizeFilenameInput('My_Resume'), 'My_Resume');
+});

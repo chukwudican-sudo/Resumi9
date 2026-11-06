@@ -4,6 +4,19 @@
 // before ".pdf" (truncate the role title first if it doesn't fit).
 
 const SPECIAL_CHARS_REGEX = /[@#%&*()/\\|?!'",.]/g;
+
+/**
+ * Company words that qualify a name rather than being part of it.
+ *
+ * "Celestica International LP" is Celestica; "Electronic Arts" is not
+ * Electronic. Only these may be dropped to make a filename fit.
+ */
+const DROPPABLE = new Set([
+  'inc', 'ltd', 'limited', 'llc', 'llp', 'lp', 'plc', 'corp', 'corporation', 'co',
+  'company', 'group', 'holdings', 'international', 'global', 'worldwide', 'canada',
+  'usa', 'us', 'uk', 'na', 'ulc', 'gmbh', 'ag', 'sa', 'bv', 'nv', 'pty', 'partners',
+  'the', 'and',
+]);
 export const FILENAME_MAX_BASE_LENGTH = 50;
 
 /**
@@ -67,6 +80,27 @@ export function buildDefaultFilenameBase(userName: string, role: string, company
   const companyWords = titleCaseWords(company);
 
   /*
+   * Only the company's throwaway words may go, and only from the end.
+   *
+   * Dropping any trailing word was wrong, and it shipped: "Electronic Arts"
+   * came out as `..._AIEngineerIntern_Electronic_Resume`. "Arts" is not a
+   * qualifier, it is half the company's name, and taking it off produces a
+   * different employer rather than a shorter one. The earlier rule — never
+   * cut a word in half — was necessary and not sufficient: a whole word
+   * dropped from a two-word name reads just as broken.
+   *
+   * So "Celestica International LP" may shorten to "Celestica", because
+   * International and LP are the kind of word every company has, and
+   * "Electronic Arts" may not shorten at all. The list is the same one the
+   * name matcher uses.
+   */
+  const companyForms: string[] = [];
+  for (let c = companyWords.length; c >= 1; c -= 1) {
+    companyForms.push(companyWords.slice(0, c).join(''));
+    if (!DROPPABLE.has(companyWords[c - 1].toLowerCase())) break;
+  }
+
+  /*
    * The role is tried longest-first and the company bends around it.
    *
    * The other way round reads worse for the same number of characters:
@@ -76,10 +110,17 @@ export function buildDefaultFilenameBase(userName: string, role: string, company
    */
   for (let r = roleWords.length; r >= 1; r -= 1) {
     const shorterRole = roleWords.slice(0, r).join('');
-    for (let c = companyWords.length; c >= 1; c -= 1) {
-      const candidate = assemble(shorterRole, companyWords.slice(0, c).join(''));
+    for (const shorterCompany of companyForms) {
+      const candidate = assemble(shorterRole, shorterCompany);
       if (candidate.length <= FILENAME_MAX_BASE_LENGTH) return candidate;
     }
+  }
+
+  // The company whole and nothing of the role, before giving up on both: a
+  // file named for the employer is still useful, one named for neither is not.
+  for (const shorterCompany of companyForms) {
+    const candidate = assemble('', shorterCompany);
+    if (candidate.length <= FILENAME_MAX_BASE_LENGTH) return candidate;
   }
 
   // Their name and the word Resume, which is all that still fits. Never a
@@ -124,8 +165,18 @@ export function withVersion(base: string, version: number | null | undefined): s
 
 /** Live-sanitizes user input in the editable filename field (base name only, no ".pdf"). */
 export function sanitizeFilenameInput(value: string): string {
-  return value
-    .replace(SPECIAL_CHARS_REGEX, '')
-    .replace(/\s+/g, '_')
-    .slice(0, FILENAME_MAX_BASE_LENGTH);
+  const cleaned = value.replace(SPECIAL_CHARS_REGEX, '').replace(/\s+/g, '_');
+  if (cleaned.length <= FILENAME_MAX_BASE_LENGTH) return cleaned;
+
+  /*
+   * Trimmed back to a whole word, like everything else here.
+   *
+   * This cut at exactly fifty characters wherever that landed, so a name
+   * arriving one character over came back as "..._ElectronicArts_Resu" — the
+   * same broken-export look the builder above goes to some length to avoid,
+   * reintroduced on the field that shows the person their filename.
+   */
+  const cut = cleaned.slice(0, FILENAME_MAX_BASE_LENGTH);
+  const lastBreak = cut.lastIndexOf('_');
+  return lastBreak > 0 ? cut.slice(0, lastBreak) : cut;
 }

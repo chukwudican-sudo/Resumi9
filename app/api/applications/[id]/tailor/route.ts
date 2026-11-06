@@ -9,7 +9,7 @@ import { DAILY_CREDITS, hoursUntil, nextReset } from '../../../../lib/credits';
 import { hasEnoughToTailor } from '../../../../lib/readiness';
 import { matchRequirements } from '../../../../lib/requirementMatch';
 import { annotate, cutTargets, resolveTailored, unreadable } from '../../../../lib/provenance';
-import { applyFlags, checkBullets } from '../../../../lib/honesty';
+import { applyFlags, checkBullets, wholeRecord } from '../../../../lib/honesty';
 import {
   CLAIM_CHECK_PROMPT,
   CLAIM_CHECK_TOOL,
@@ -252,6 +252,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
       // The posting's own prose, for the echo check: the extracted list holds
       // tool names, and nothing on it says "flag anomalies".
       postingWords,
+      // And their whole record as the other half of that comparison — a word
+      // they use anywhere was not taken from the posting. See `lifted`.
+      wholeRecord(structure, supporting.map((fact) => fact.text)),
     );
     /*
      * And the same question asked of the model, for what arithmetic cannot see.

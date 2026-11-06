@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { polishMasterResume } from '../../server/actions';
 import { useUndo } from '../undo/UndoProvider';
@@ -54,11 +54,127 @@ export default function DownloadPdf({
   const [blocking, setBlocking] = useState<{ message: string }[]>([]);
   const { dismiss } = useUndo();
 
+  /**
+   * The finished PDF, fetched before anybody asks for it.
+   *
+   * Three faults, one cause: the file was built after the click. Chrome
+   * allows a programmatic save only while the click that caused it is still
+   * the current user gesture, and `await fetch(...)` spends that gesture — so
+   * the FIRST download worked and every one after it in the same tab was
+   * blocked silently, no error, no file. Navigating away mid-build threw the
+   * work away, and the only sign anything was happening was the word
+   * "Building…" on the button.
+   *
+   * So it is built up front and the click only saves it. The save is then
+   * synchronous with the gesture, which is what Chrome asks for; the file is
+   * already on the machine when the button is pressed, so leaving the page
+   * cannot lose it; and the button can say whether it is ready instead of
+   * going quiet for several seconds.
+   *
+   * It costs no extra compile. This is the same URL, with the same ETag, that
+   * the preview beside it has already fetched — the browser serves it from
+   * cache, and a revalidation the server answers is a hash comparison rather
+   * than a build.
+   */
+  const [ready, setReady] = useState<{ blob: Blob; filename: string } | null>(null);
+  const building = useRef<Promise<{ blob: Blob; filename: string } | null> | null>(null);
+
   // The "Not ready to send" list had the same problem as the polish panel: a
   // popover with one small × and no other exit.
   useEscape(blocking.length > 0, () => setBlocking([]));
 
+  /**
+   * Fetches the PDF and its server-chosen name, once per version.
+   *
+   * Shared by the prefetch and the click, through `building`, so pressing
+   * the button while the prefetch is still in flight waits for that one
+   * rather than starting a second compile.
+   *
+   * Errors are deliberately swallowed here and re-raised by the click: a
+   * prefetch nobody asked for must never put a message on screen, and the
+   * readiness list in particular belongs to the moment somebody tries to
+   * send the thing.
+   */
+  const fetchPdf = useCallback(async () => {
+    if (building.current) return building.current;
+    const query = applicationId
+      ? `?applicationId=${encodeURIComponent(applicationId)}${version ? `&v=${version}` : ''}`
+      : '';
+    const run = (async () => {
+      const response = await fetch(`/api/resume/preview${query}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw Object.assign(new Error(body?.error ?? `Something went wrong (${response.status}).`), {
+          blocking: Array.isArray(body?.blocking) ? body.blocking : [],
+        });
+      }
+      const disposition = response.headers.get('Content-Disposition') ?? '';
+      const named = /filename="([^"]+)"/.exec(disposition);
+      return { blob: await response.blob(), filename: named?.[1] ?? 'Resume.pdf' };
+    })();
+    building.current = run;
+    try {
+      const got = await run;
+      setReady(got);
+      return got;
+    } catch (err) {
+      // Cleared so a later click retries rather than replaying the failure.
+      building.current = null;
+      throw err;
+    }
+  }, [applicationId, version]);
+
+  /*
+   * Built as soon as there is something to build, and again when the version
+   * changes — an edit makes a new resume, and handing over the previous one
+   * because it happened to be cached is worse than any delay.
+   *
+   * Not on the master-resume path: that one may have to polish first, which
+   * rewrites bullets and costs two model calls, and doing it because a page
+   * loaded would be spending somebody's time on a file they have not asked
+   * for.
+   */
+  useEffect(() => {
+    if (!applicationId || polishFirst) return;
+    setReady(null);
+    building.current = null;
+    let cancelled = false;
+    void fetchPdf().catch(() => {
+      // Quiet by design. The click reports it.
+      if (!cancelled) setReady(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId, version, polishFirst, fetchPdf]);
+
+  /** Hands a blob to the browser. Must stay synchronous — see `ready`. */
+  function save({ blob, filename }: { blob: Blob; filename: string }) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function download() {
+    /*
+     * The file is already here, so it is handed over inside the click.
+     *
+     * No await before `save`, deliberately: the gesture is still current, and
+     * that is the whole difference between a download and Chrome silently
+     * dropping the second one of the session.
+     */
+    if (ready && !polishFirst) {
+      save(ready);
+      setMessage(null);
+      setBlocking([]);
+      return;
+    }
+
     setState('working');
     setMessage(null);
     setBlocking([]);
@@ -90,16 +206,24 @@ export default function DownloadPdf({
         router.refresh();
       }
 
-      const response = await fetch('/api/compile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // The version being looked at, not whatever is newest. Without it the
-      // download hands over the latest while an older one is on screen, and the
-      // filename gives no hint that they differ.
-      body: JSON.stringify(applicationId ? { applicationId, version } : {}),
-      });
+      /*
+       * The master resume still compiles on demand, because a polish has to
+       * run first and may have just rewritten every bullet. Applications take
+       * the prefetched copy above; this is the path where there is nothing to
+       * prefetch.
+       *
+       * Still POST /api/compile for that case: it is the route that builds
+       * from the profile rather than from a saved version.
+       */
+      const response = applicationId
+        ? null
+        : await fetch('/api/compile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
 
-      if (!response.ok) {
+      if (response && !response.ok) {
         // The wait goes first, or the reason for the failure is behind it.
         wait?.cancel();
         const body = await response.json().catch(() => null);
@@ -113,26 +237,42 @@ export default function DownloadPdf({
 
       // The filename is the server's to decide — it is the one thing a
       // recruiter sees before opening the file.
-      const disposition = response.headers.get('Content-Disposition') ?? '';
-      const named = /filename="([^"]+)"/.exec(disposition);
-      const blob = await response.blob();
+      let got: { blob: Blob; filename: string };
+      if (response) {
+        const disposition = response.headers.get('Content-Disposition') ?? '';
+        const named = /filename="([^"]+)"/.exec(disposition);
+        got = { blob: await response.blob(), filename: named?.[1] ?? 'Resume.pdf' };
+      } else {
+        /*
+         * Clicked before the prefetch finished, which is the one case left
+         * where the save happens after an await. Chrome allows the first
+         * such download in a tab, and by the second the prefetch has long
+         * since landed — so this path is the rare one, not the usual one.
+         */
+        const prefetched = await fetchPdf();
+        if (!prefetched) throw new Error('No PDF came back.');
+        got = prefetched;
+      }
 
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = named?.[1] ?? 'Resume.pdf';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      save(got);
 
       // Finished here, not after the polish: the compile is the last step in the
       // list the person is looking at.
       wait?.finish();
       setState('idle');
-    } catch {
+    } catch (err) {
       wait?.cancel();
-      setMessage('Your internet connection dropped. Please check your connection.');
+      /*
+       * A readiness refusal is not a network fault.
+       *
+       * `fetchPdf` throws the server's own message with its blocking list
+       * attached, and reporting that as "your internet connection dropped"
+       * sends somebody to check a router over an unfinished resume.
+       */
+      const said = err instanceof Error ? err.message : '';
+      const list = (err as { blocking?: { message: string }[] })?.blocking;
+      setMessage(said || 'Your internet connection dropped. Please check your connection.');
+      setBlocking(Array.isArray(list) ? list : []);
       setState('error');
     }
   }
@@ -149,7 +289,20 @@ export default function DownloadPdf({
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
         </svg>
-        {state === 'working' ? 'Building…' : 'Download PDF'}
+        {/*
+          Says which of the three states it is in.
+
+          It said "Download PDF" through several seconds of compiling and
+          then nothing happened, which is the "no preparing message" report.
+          Now the preparing happens before the click, so the usual reading is
+          the plain label on a button that saves instantly; "Preparing…"
+          only shows in the short window after a page load or an edit.
+        */}
+        {state === 'working'
+          ? 'Building…'
+          : applicationId && !polishFirst && !ready
+            ? 'Preparing…'
+            : 'Download PDF'}
       </button>
 
       {blocking.length ? (

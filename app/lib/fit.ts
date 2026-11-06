@@ -123,7 +123,7 @@ const MIN_SKILL_LINES = 3;
  * five or fewer, and a cap tighter than the thing it is measured by would be
  * the app overruling them for no reason it could name.
  */
-const MAX_SKILL_LINES = 5;
+export const MAX_SKILL_LINES = 5;
 
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
@@ -522,6 +522,12 @@ function weakestLines(
 /**
  * The skills section, capped, whatever the page count says.
  *
+ * Exported because an EDIT needs it too and does not run the fitter. The
+ * fitter is only called on an edit that restored something — refitting every
+ * edit would let a sentence about wording quietly cost an entry — so a
+ * sentence that adds a skills group left the section at six lines against a
+ * rule asking for five, with nothing to bring it back.
+ *
  * Measured on eleven real resumes: when the page was over, the fitter trimmed
  * skills to three; when it fitted, the model's own line count survived — five
  * or six, the same items reordered. So the length of the longest section on
@@ -531,7 +537,7 @@ function weakestLines(
  * Pins win over the cap: a line somebody marked "always include" stays even
  * when that leaves six. They asked, and the cap is the app's own judgement.
  */
-function cappedSkills(
+export function cappedSkills(
   structure: ResumeStructure,
   posting: string,
   pinned: readonly Pin[],

@@ -177,6 +177,43 @@ const COMMON = new Set([
 ]);
 
 /**
+ * Everything a person has written about themselves, as one string.
+ *
+ * The denominator for the echo check, which asks whether a word came from the
+ * posting or from them. Their skills count, their other entries count, and so
+ * do the facts they have answered — a word they have used anywhere is theirs.
+ */
+export function wholeRecord(
+  structure: {
+    experience?: unknown;
+    projects?: unknown;
+    education?: unknown;
+    skills?: unknown;
+    summary?: unknown;
+  },
+  alsoSaid: readonly string[] = [],
+): string {
+  const list = (value: unknown) => (Array.isArray(value) ? value : []);
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  return [
+    ...list(structure.skills).map((g) => `${text((g as any)?.category)} ${text((g as any)?.items)}`),
+    ...list(structure.experience).map((e) =>
+      [text((e as any)?.title), text((e as any)?.org), ...list((e as any)?.bullets)].join(' '),
+    ),
+    ...list(structure.projects).map((p) =>
+      [text((p as any)?.name), text((p as any)?.tech), ...list((p as any)?.bullets)].join(' '),
+    ),
+    ...list(structure.education).map((e) =>
+      [text((e as any)?.degree), text((e as any)?.school), ...list((e as any)?.bullets)].join(' '),
+    ),
+    text(structure.summary),
+    ...alsoSaid,
+  ]
+    .filter((part) => part.trim())
+    .join(' \n ');
+}
+
+/**
  * A word reduced to its root, crudely.
  *
  * Only enough to see that "validating" and "validate" are the same word.
@@ -277,7 +314,7 @@ export function toldByThePerson(text: string, words: string): boolean {
  * the models" where the source says "AI/LLM model". Nothing lexical reaches
  * those — of eleven inventions in the report, this reads six.
  */
-const lifted = (text: string, evidence: string, posting: string): string | null => {
+const lifted = (text: string, evidence: string, posting: string, record = ''): string | null => {
   if (!posting.trim()) return null;
 
   /**
@@ -348,7 +385,26 @@ const lifted = (text: string, evidence: string, posting: string): string | null 
   /** One word or a run of two, as the bullet punctuated it. */
   const asWritten = (from: number, to = from) => text.slice(written[from].at, written[to].end);
 
-  const inSource = wordSet(evidence);
+  /*
+   * Their WHOLE record answers this one, not the single bullet's sources.
+   *
+   * The narrower checks above ask "does this bullet's evidence support this
+   * claim", which is right: leading a team at Aegon does not license the
+   * sentence about Droady. This check asks something else — did the model
+   * reach into the POSTING for a word the person never uses — and for that
+   * the denominator has to be everything the person has written. A word that
+   * appears anywhere in their own record was not lifted from anywhere.
+   *
+   * Measured on fifty-five real reverts from fourteen tailors, the per-bullet
+   * reading took off: "git", which is on their Kudi Kitchen bullet and in
+   * their skills; "in Java", which is FraudWatch's own tech line; "in
+   * Python/FastAPI", which is Rate Limit Lab's; "communication", which is in
+   * their Aegon bullet; and an entire FraudWatch sentence, word for word out
+   * of their profile. Each one reverted a tailored bullet back to generic
+   * wording and told them their profile does not say a thing their profile
+   * says.
+   */
+  const inSource = wordSet([evidence, record].filter((part) => part.trim()).join(' \n '));
 
   /*
    * A pair counts when the posting has it and the SOURCE is missing a word of
@@ -424,6 +480,14 @@ export function checkBullets(
    * those. Empty string behaves exactly as before.
    */
   posting = '',
+  /**
+   * Everything the person has written, for the echo check alone.
+   *
+   * See `lifted`: "did the model take this from the posting" is a question
+   * about their vocabulary, not about one bullet's sources, and asking it per
+   * bullet reverted their own sentences off their own resume.
+   */
+  record = '',
 ): Flag[] {
   const flags: Flag[] = [];
 
@@ -509,7 +573,7 @@ export function checkBullets(
      * the narrower ones can name gets named by them instead — "claims
      * \"python\"" tells somebody more than "reaches for \"python testing\"".
      */
-    const echoed = lifted(bullet.text, evidence, posting);
+    const echoed = lifted(bullet.text, evidence, posting, record);
     if (echoed) {
       flags.push({
         text: bullet.text,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readInstruction } from './asked';
-import { applyFlags, checkBullets, toldByThePerson } from './honesty';
+import { applyFlags, checkBullets, toldByThePerson, wholeRecord } from './honesty';
 import type { ResolvedBullet } from './provenance';
 import type { ResumeStructure } from './types';
 
@@ -842,4 +842,75 @@ test('the tech line is never what a bullet reverts to', () => {
   );
   assert.equal(flags.length, 1);
   assert.equal(flags[0].revertTo, 'Cut p99 latency');
+});
+
+// ── the echo check asks about their vocabulary, not one bullet's sources ──
+
+const RECORD_PROFILE = {
+  skills: [{ category: 'Tools & Practices', items: 'Git, GitHub Actions (CI/CD), Docker' }],
+  experience: [
+    { title: 'Wealth Manager', org: 'Aegon', bullets: ['Led 20+ advisors, delivering training and communication at conventions'] },
+  ],
+  projects: [
+    { name: 'FraudWatch', tech: 'Java, REST API, CI/CD', bullets: ['Led the backend on a 3-person team'] },
+    { name: 'Rate Limit Lab', tech: 'Python, FastAPI, pytest', bullets: ['Compared three rate-limiting algorithms'] },
+  ],
+};
+
+const POSTING = 'We want Java, Python and Git. Strong communication. Experience with deep learning.';
+
+/** One changed bullet whose own evidence is deliberately narrow. */
+const rewritten = (text: string, evidence: string, context = ''): ResolvedBullet =>
+  ({ text, changed: true, unsourced: false, evidence: [evidence], context }) as ResolvedBullet;
+
+test('a word from their own record is not treated as taken from the posting', () => {
+  /*
+   * Measured on fifty-five real reverts: "git", which is in their skills;
+   * "in Java", which is FraudWatch's tech line; "communication", which is in
+   * their Aegon bullet. Each reverted a tailored bullet to generic wording
+   * and told them their profile does not say a thing their profile says.
+   */
+  const record = wholeRecord(RECORD_PROFILE);
+  for (const [text, evidence] of [
+    ['Shipped the pipeline with Git and Docker', 'Shipped the pipeline'],
+    ['Built the detection algorithms in Java', 'Built the detection algorithms'],
+    ['Led advisors, improving communication across the team', 'Led advisors'],
+  ] as const) {
+    const narrow = checkBullets([rewritten(text, evidence)], [], undefined, undefined, POSTING, '');
+    const wide = checkBullets([rewritten(text, evidence)], [], undefined, undefined, POSTING, record);
+    assert.equal(wide.length, 0, `"${text}" should stand: every word of it is theirs`);
+    assert.ok(narrow.length >= wide.length, 'widening the record never adds a flag');
+  }
+});
+
+test('a claim that is nowhere in their record is still caught', () => {
+  const record = wholeRecord(RECORD_PROFILE);
+  const flags = checkBullets(
+    [rewritten('Built the detection algorithms with deep learning model training', 'Built the detection algorithms')],
+    [],
+    undefined,
+    undefined,
+    POSTING,
+    record,
+  );
+  assert.equal(flags.length, 1, 'deep learning is in the posting and nowhere in their record');
+});
+
+test('the record covers skills, entries, tech lines and answered facts', () => {
+  const record = wholeRecord(RECORD_PROFILE, ['Did user research in Figma']);
+  for (const word of ['Git', 'Docker', 'Aegon', 'FastAPI', 'FraudWatch', 'Figma']) {
+    assert.match(record, new RegExp(word), `${word} belongs to their record`);
+  }
+});
+
+test('an empty record changes nothing', () => {
+  assert.equal(wholeRecord({}), '');
+  const flags = checkBullets(
+    [rewritten('Built it with deep learning', 'Built it')],
+    [],
+    undefined,
+    undefined,
+    POSTING,
+  );
+  assert.equal(flags.length, 1, 'the old behaviour, unchanged, when no record is passed');
 });
