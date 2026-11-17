@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import { callClaude } from '../app/lib/anthropic';
 import { TAILOR_INVARIANT, buildUserContext } from '../app/lib/systemPrompt';
 import { annotate, cutTargets, resolveTailored, unreadable } from '../app/lib/provenance';
-import { applyFlags, checkBullets } from '../app/lib/honesty';
+import { applyFlags, checkBullets, wholeRecord } from '../app/lib/honesty';
 import {
   CLAIM_CHECK_PROMPT,
   CLAIM_CHECK_TOOL,
@@ -39,6 +39,7 @@ import {
 import { surfaceRepairs, validateTailored } from '../app/lib/tailorGuard';
 import { fitToPages } from '../app/lib/fit';
 import { pinsFromRules } from '../app/lib/pins';
+import { pageTarget, type RuleCheck } from '../app/lib/rules';
 import { renderResumeLatex } from '../app/lib/latexEngine';
 import { compileWithMeta } from '../app/server/pdf';
 import { tailorToolFor } from '../app/api/claude/shared';
@@ -179,7 +180,22 @@ async function main() {
       const resolved = resolveTailored(toolInput.structure, index);
       if (unreadable(resolved.bullets)) throw new Error('came back in a shape nothing could read');
 
-      const flags = checkBullets(resolved.bullets, (posting.requirements as string[]) ?? [], undefined, undefined, postingWords);
+      /*
+       * Every argument the route passes, in the route's order.
+       *
+       * This harness mirrors the route by hand, and it had drifted: the route
+       * gained a `record` argument here and a `posting` on the guard below,
+       * and neither reached this copy. So an acceptance run exercised the
+       * behaviour of a fortnight ago and reported it as what ships.
+       */
+      const flags = checkBullets(
+        resolved.bullets,
+        (posting.requirements as string[]) ?? [],
+        undefined,
+        undefined,
+        postingWords,
+        wholeRecord(structure, supporting.map((f) => f.text)),
+      );
       let checked = flags;
       let claimNote = 'nothing to ask about';
       const asking = claimCheckInput(resolved.bullets);
@@ -205,9 +221,13 @@ async function main() {
       const honest = applyFlags(resolved.structure, checked);
       const guarded = validateTailored(structure, honest.structure, {
         alsoSaid: supporting.map((f) => f.text).join(' \n '),
+        posting: postingWords,
       });
       const fitted = await fitToPages(guarded.structure, {
-        target: 1,
+        // The person's own rule, as the route reads it. Hard-coding one page
+        // meant this could never run for somebody whose rule says two, and
+        // Resumi has more than one person in it.
+        target: pageTarget(rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null }))),
         cuts: cutTargets(toolInput.cutOrder, resolved.bullets, index, new Map(flags.map((f) => [f.text, f.revertTo]))),
         posting: postingWords,
         pinned: PINS,

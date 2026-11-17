@@ -272,6 +272,23 @@ function usableCuts(
   };
 
   const mayDrop = (section: Section, at: number): boolean => {
+    /*
+     * Already gone is not droppable again.
+     *
+     * This asked about the floor and about what would be left, and never
+     * about the entry in front of it — which was safe only for as long as
+     * every caller filtered by `gone` first. One stopped doing that and the
+     * same project was offered twice: the model's own ranking took it, and a
+     * later pass that walked the section by index took it again. The cut list
+     * then held one index twice, the change log read "Dropped 4 projects to
+     * fit one page: …, Kudi Kitchen, Kudi Kitchen, …", and the dropped-entry
+     * record grew a phantom the restore path would have offered back.
+     *
+     * The guard belongs here rather than in the callers: it is a fact about
+     * this function's own bookkeeping, and any future caller that walks
+     * indexes directly would rediscover the bug the same way.
+     */
+    if (gone[section].has(at)) return false;
     if (identity[section].length - gone[section].size <= floor[section]) return false;
     return remaining[section].some((bullets, i) => i !== at && !gone[section].has(i) && bullets.length > 0);
   };
