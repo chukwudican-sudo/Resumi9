@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { callClaude } from './anthropic';
+import { splitTerms } from './names';
 import type { ResumeStructure } from './types';
 import { STORED_ELSEWHERE, contentFor, hasContent, planSections } from './sections';
 
@@ -28,7 +29,7 @@ Check carefully the names you do know. Universities, companies, cities, province
 A place name is two words often enough that people mistype the second one and read past it. Check the part after the comma as carefully as the part before it.
 
 Leave alone, always:
-- technical terms, libraries, tools and product names — pytest, matplotlib, RevenueCat, PostgreSQL, MealApp, FraudWatch. A spellchecker flags all of these and every "fix" would be damage.
+- technical terms, libraries, tools and product names — pytest, matplotlib, PostgreSQL, Kubernetes. A spellchecker flags all of these and every "fix" would be damage.
 - names you do not recognise. An unfamiliar company or product is far likelier to be spelled correctly than to be a typo you can fix. This does not cover places: there are a few hundred provinces, states and countries and you know them, so an unrecognised one is a typo rather than somewhere you have not heard of.
 - numbers, dates, and anything inside a web address.
 - British or Canadian spellings. "organisation" and "colour" are not typos.
@@ -135,15 +136,64 @@ export function readableText(structure: ResumeStructure, contactName?: string): 
   return lines.filter((line) => line !== undefined).join('\n');
 }
 
+/**
+ * The proper nouns this person has put on their own resume.
+ *
+ * The prompt used to name two projects as examples of things not to
+ * "correct" — and they were one account's projects, sent in every other
+ * person's proofread. Worse than a leak, it was the wrong list: it protected
+ * two names nobody else has and said nothing about the employer, school or
+ * product the reader actually typed.
+ *
+ * A name somebody wrote into their own profile is theirs. They may have
+ * misspelled it, but a model cannot tell a misspelling from an unfamiliar
+ * company, and the cost is asymmetric: a missed typo in a product name is a
+ * blemish, while "fixing" a real employer's name puts a wrong employer on a
+ * resume that goes to that employer.
+ */
+export function ownNames(structure: ResumeStructure): string[] {
+  const list = (value: unknown) => (Array.isArray(value) ? value : []);
+  const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+  const names = [
+    ...list(structure.experience).map((e) => text((e as { org?: string }).org)),
+    ...list(structure.projects).flatMap((p) => [
+      text((p as { name?: string }).name),
+      // The tech line is a list of tool names, which is exactly the other
+      // category this is protecting.
+      ...splitTerms(text((p as { tech?: string }).tech)),
+    ]),
+    ...list(structure.education).map((e) => text((e as { school?: string }).school)),
+    ...list(structure.certifications).map((c) => text(c)),
+    ...list(structure.awards).map((a) => text(a)),
+    ...list(structure.skills).flatMap((g) => splitTerms(text((g as { items?: string }).items))),
+  ].filter(Boolean);
+
+  const seen = new Set<string>();
+  return names.filter((n) => {
+    const key = n.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function proofread(
   userId: string,
   structure: ResumeStructure,
   contactName?: string,
 ): Promise<Correction[]> {
+  /*
+   * Their own names, listed for this call only. Capped because a long skills
+   * section would otherwise dominate the prompt, and the longest names are
+   * the ones a spellchecker is likeliest to mangle.
+   */
+  const mine = ownNames(structure).sort((a, b) => b.length - a.length).slice(0, 60);
   const { toolInput } = await callClaude<{ corrections: Correction[] }>({
     userId,
     kind: 'proofread',
-    system: PROOFREAD_PROMPT,
+    system: mine.length
+      ? `${PROOFREAD_PROMPT}\n\nThese are this person's own names for their employers, schools, projects and tools, exactly as they wrote them. Treat every one as correct and never return a correction for any of them:\n${mine.join(', ')}`
+      : PROOFREAD_PROMPT,
     content: [{ type: 'text' as const, text: readableText(structure, contactName) }],
     tool: PROOFREAD_TOOL,
   });

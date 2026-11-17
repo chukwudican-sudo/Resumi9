@@ -1,29 +1,35 @@
 /**
- * The Nov 4 bug report's acceptance tests, re-run against real postings.
+ * Acceptance, across people — the real pipeline, the real compiler, invented profiles.
  *
- *   npx tsx scripts/acceptance.ts            # every posting of that run
- *   npx tsx scripts/acceptance.ts "Deep Learning"   # one, by role
+ *   ACCEPTANCE_USER_ID=user_... npx tsx scripts/acceptance.ts
+ *   ACCEPTANCE_USER_ID=user_... npx tsx scripts/acceptance.ts swe-student
  *
- * **It spends money and it writes nothing.** Eleven tailors and eleven claim
- * checks, about fifty cents, and every read is a select — no resume is saved,
- * no credit is spent, nothing in the account changes. That is deliberate: the
- * report's own instruction is "re-run the same 11 postings after the fixes",
- * and a run that saved its results would bury the real history under harness
- * output.
+ * **It spends money and it writes nothing.** One tailor and one claim check
+ * per combination — sixteen of each at full size — and it touches no account
+ * beyond metering the spend: it reads no profile, no rules and no postings
+ * from the database. Everything it runs on is app/lib/fixtures/people.ts.
  *
  * It mirrors the tailor route's sequence rather than calling the route, which
- * needs a signed-in request. The order below — annotate, model, resolve,
- * honesty, claim check, guard, fit — is the route's, and if the route's order
- * changes this has to change with it. The alternative was a harness that
- * could not run at all, since the route saves and saving is the one thing
- * this must not do.
+ * needs a signed-in request. The order — annotate, model, resolve, honesty,
+ * claim check, guard, fit — is the route's, and when the route's changes this
+ * has to change with it. It had drifted three times by 16 Nov: `checkBullets`
+ * lost an argument, the guard lost another, and the page target was pinned at
+ * one, which meant it could not run at all for somebody whose rule says two.
+ * A run then reported the behaviour of a fortnight earlier as what ships. The
+ * arguments below are written one per line for that reason, so a change to
+ * the route's call shows up as a diff here.
  *
- * Lives here rather than in the test suite because it needs tectonic, an API
- * key, and a minute of wall clock. It lives in the repo rather than in a
- * scratch directory because it has now been lost twice to a cleaned temp
- * folder, both times immediately before somebody asked for its results.
+ * **Why this as well as the unit suite.** app/lib/pipeline.test.ts runs the
+ * same fixtures through the guard and the fitter with no model call and a
+ * counted page, which is free and fast and catches what the APP decides. It
+ * cannot catch what the MODEL decides, and it explicitly cannot catch a
+ * pagination bug, because nothing in it compiles. This calls Claude and
+ * compiles with tectonic, which is why it is a script and not a test.
+ *
+ * What used to live in this file ran against one real account and asserted
+ * things about that person's employers, degree and coursework. It is now
+ * scripts/personal-smoke.ts, and it is nobody's acceptance criteria.
  */
-import postgres from 'postgres';
 import fs from 'node:fs';
 import { callClaude } from '../app/lib/anthropic';
 import { TAILOR_INVARIANT, buildUserContext } from '../app/lib/systemPrompt';
@@ -37,29 +43,32 @@ import {
   type ClaimVerdict,
 } from '../app/lib/claimCheck';
 import { surfaceRepairs, validateTailored } from '../app/lib/tailorGuard';
-import { fitToPages } from '../app/lib/fit';
+import { MAX_SKILL_LINES, fitToPages } from '../app/lib/fit';
 import { pinsFromRules } from '../app/lib/pins';
-import { pageTarget, type RuleCheck } from '../app/lib/rules';
+import { pageLimit, type RuleCheck } from '../app/lib/rules';
+import { splitTerms } from '../app/lib/names';
 import { renderResumeLatex } from '../app/lib/latexEngine';
 import { compileWithMeta } from '../app/server/pdf';
 import { tailorToolFor } from '../app/api/claude/shared';
-import type { ResumeStructure } from '../app/lib/types';
+import { PEOPLE, type Person } from '../app/lib/fixtures/people';
 
-/** The eleven phrases the report tabulates as lifted from the postings. */
-const LIFTED = [
-  'flag anomalies', 'tracking data quality', 'latency constraints', 'integration checks before merge',
-  'endpoint logic for consumers', 'AI-assisted development', 'against baseline',
-  'prepare data for the models', 'multi-discipline', 'defect tracking', 'trend analysis and reporting',
-];
-
-/**
- * Skills the person said they are taking off their profile.
- *
- * Docker, Excel, PowerPoint and Microsoft 365 are NOT here: the report guessed
- * the model was adding them and they were in the profile all along, so they
- * are real skills and stay.
- */
-const UNVERIFIED = ['Cybersecurity', 'ChatGPT', 'AI-Assisted Development Tools'];
+interface Run {
+  who: string;
+  failed?: string;
+  pages?: number | null;
+  target?: number;
+  jobs?: string[];
+  projects?: string[];
+  skills?: string[];
+  items?: string[];
+  thin?: string[];
+  dropped?: string[];
+  log?: string[];
+  warnings?: string[];
+  reverted?: number;
+  moved?: string[];
+  person?: Person;
+}
 
 async function main() {
   const env = Object.fromEntries(
@@ -70,328 +79,243 @@ async function main() {
   );
   for (const [k, v] of Object.entries(env)) if (!process.env[k]) process.env[k] = v as string;
 
-  const sql = postgres(env.DATABASE_URL, { prepare: false, max: 1 });
-
-  // The account that made the apply run the report is about: whoever produced
-  // the most resumes in it. Named by what they did rather than by an id, so the
-  // script carries nobody's identity.
-  const [{ user_id: userId }] = await sql`
-    select r.user_id from resumes r
-    where r.created_at > '2026-11-04 21:00'
-    group by r.user_id order by count(*) desc limit 1`;
-
-  const [{ resume_structure: base }] = await sql`select resume_structure from profiles where user_id = ${userId}`;
-  const rules = (await sql`
-    select id, text, "check" from rules
-    where user_id = ${userId} and active = true order by order_index`) as unknown as {
-    id: string;
-    text: string;
-    check: unknown;
-  }[];
-  const supporting = (await sql`
-    select f.category, f.text, f.entry_id as "entryId", coalesce(pe.org, pe.title) as "entryName"
-    from facts f left join profile_entries pe on pe.id = f.entry_id
-    where f.user_id = ${userId} and f.status = 'active' and f.category not in ('identity','skill')
-    limit 80`) as unknown as { text: string; entryId: string | null; entryName: string | null }[];
-  const [user] = await sql`
-    select display_name as "displayName", locale, stage, target_field as "targetField"
-    from users where id = ${userId}`;
-  const postings = (await sql`
-    select p.company, p.role, p.description, p.requirements
-    from job_postings p
-    join applications a on a.posting_id = p.id
-    join resumes r on r.application_id = a.id
-    where r.created_at > '2026-11-04 21:00' and r.user_id = ${userId}
-    group by p.id, p.company, p.role, p.description, p.requirements
-    order by min(r.created_at)`) as unknown as {
-    company: string | null;
-    role: string | null;
-    description: string | null;
-    requirements: unknown;
-  }[];
-  await sql.end();
-
-  const structure = base as ResumeStructure;
-  const only = process.argv[2];
-  const chosen = only ? postings.filter((p) => new RegExp(only, 'i').test(String(p.role))) : postings;
-  const PINS = pinsFromRules(rules, structure);
-
-  console.log(`profile: ${structure.experience.length} jobs, ${structure.projects.length} projects, ${(structure.skills ?? []).length} skills lines`);
-  for (const r of rules) console.log(`   rule: ${r.check ? 'Checked ' : 'Guidance'} — ${String(r.text).slice(0, 78)}`);
-  console.log(`pinned by a rule: ${PINS.map((p) => p.label).join(', ') || 'nothing'}`);
-  console.log(`\nrunning ${chosen.length} posting(s)\n`);
-
-  interface Result {
-    label: string;
-    failed?: string;
-    pages?: number | null;
-    jobs?: string[];
-    projects?: string[];
-    skills?: string[];
-    skillItems?: string;
-    thin?: string[];
-    coursework?: string;
-    degree?: string;
-    projectDates?: string[];
-    text?: string;
-    claims?: number;
-    claimNote?: string;
-    log?: string[];
+  /*
+   * An account id, for metering only.
+   *
+   * callClaude records spend and enforces the daily ceiling against a user,
+   * so the calls have to be charged somewhere. Nothing else about that
+   * account is read — not their profile, not their rules, not their
+   * postings — which is the whole point of this file.
+   */
+  const userId = process.env.ACCEPTANCE_USER_ID;
+  if (!userId) {
+    console.error('Set ACCEPTANCE_USER_ID to the account this run\'s API spend should be metered against.');
+    process.exit(1);
   }
 
-  const results: Result[] = [];
+  const only = process.argv[2];
+  const people = only ? PEOPLE.filter((p) => new RegExp(only, 'i').test(p.name)) : PEOPLE;
+  if (!people.length) {
+    console.error(`No fixture matches "${only}". Known: ${PEOPLE.map((p) => p.name).join(', ')}`);
+    process.exit(1);
+  }
 
-  for (const posting of chosen) {
-    const label = `${String(posting.company ?? '?').slice(0, 14)} / ${String(posting.role ?? '?').slice(0, 42)}`;
-    const postingWords = [posting.description ?? '', ((posting.requirements as string[]) ?? []).join(' ')].join(' \n ');
-    const deadline = Date.now() + 110_000;
+  const runs: Run[] = [];
+  const tailors = people.reduce((n, p) => n + p.postings.length, 0);
+  console.log(`${people.length} profile(s), ${tailors} tailor(s), real compiles\n`);
 
-    try {
-      const { profile: annotated, index } = annotate(structure, supporting);
-      const said = supporting.length
-        ? 'Also true of this person, in their own words, from questions they have answered — the `facts` list above. These are NOT yet on the resume. Use any that the posting makes relevant, worked into an existing entry rather than added as a new one, and name its id in that bullet\'s "from". They are the only other thing you may draw on, and you may not extrapolate beyond what each one says.'
-        : null;
+  for (const person of people) {
+    const rules = person.rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null }));
+    const limit = pageLimit(rules);
+    const pins = pinsFromRules(person.rules, person.profile);
 
-      const { toolInput } = await callClaude<any>({
-        userId,
-        kind: 'tailor',
-        system: TAILOR_INVARIANT,
-        systemSuffix: buildUserContext({
-          displayName: structure.name || user?.displayName,
-          locale: user?.locale,
-          rules,
-          stage: user?.stage,
-          targetField: user?.targetField,
-        }),
-        content: [{
-          type: 'text' as const,
-          text: [
-            'Their profile — the Resume Structure to edit. This is the resume of record; keep the same entries, dates, and section identities, and rewrite freely within them. Every entry and bullet carries an id: return each entry\'s id unchanged, and name in each bullet\'s "from" the bullet or fact ids it is a rewrite of.',
-            '```json', JSON.stringify(annotated), '```',
-            said,
-            `Job posting — Company: ${posting.company ?? '(not provided)'}, Role: ${posting.role ?? '(not provided)'}\n${posting.description ?? '(no description)'}`,
-            'Produce the tailored resume now via submit_tailored_resume. The structure and the facts above are your only sources for what this person has done — tailor within them and invent nothing to fill gaps. A bullet you are leaving as it stands needs only its "from"; leave its text out.',
-          ].filter(Boolean).join('\n\n'),
-        }],
-        tool: tailorToolFor({ hasSummary: Boolean(structure.summary?.trim()) }),
-        deadline,
-      });
+    for (const posting of person.postings) {
+      const who = `${person.name} / ${posting.role}`;
+      const deadline = Date.now() + 110_000;
+      try {
+        const { profile: annotated, index } = annotate(person.profile, []);
+        const { toolInput } = await callClaude<any>({
+          userId,
+          kind: 'tailor',
+          system: TAILOR_INVARIANT,
+          systemSuffix: buildUserContext({ displayName: person.profile.name, rules: [...person.rules] }),
+          content: [{
+            type: 'text' as const,
+            text: [
+              'Their profile — the Resume Structure to edit. This is the resume of record; keep the same entries, dates, and section identities, and rewrite freely within them. Every entry and bullet carries an id: return each entry\'s id unchanged, and name in each bullet\'s "from" the bullet or fact ids it is a rewrite of.',
+              '```json', JSON.stringify(annotated), '```',
+              `Job posting — Company: (not provided), Role: ${posting.role}\n${posting.text}`,
+              'Produce the tailored resume now via submit_tailored_resume. The structure and the facts above are your only sources for what this person has done — tailor within them and invent nothing to fill gaps. A bullet you are leaving as it stands needs only its "from"; leave its text out.',
+            ].join('\n\n'),
+          }],
+          tool: tailorToolFor({ hasSummary: Boolean(person.profile.summary?.trim()) }),
+          deadline,
+        });
 
-      const resolved = resolveTailored(toolInput.structure, index);
-      if (unreadable(resolved.bullets)) throw new Error('came back in a shape nothing could read');
+        const resolved = resolveTailored(toolInput.structure, index);
+        if (unreadable(resolved.bullets)) throw new Error('came back in a shape nothing could read');
 
-      /*
-       * Every argument the route passes, in the route's order.
-       *
-       * This harness mirrors the route by hand, and it had drifted: the route
-       * gained a `record` argument here and a `posting` on the guard below,
-       * and neither reached this copy. So an acceptance run exercised the
-       * behaviour of a fortnight ago and reported it as what ships.
-       */
-      const flags = checkBullets(
-        resolved.bullets,
-        (posting.requirements as string[]) ?? [],
-        undefined,
-        undefined,
-        postingWords,
-        wholeRecord(structure, supporting.map((f) => f.text)),
-      );
-      let checked = flags;
-      let claimNote = 'nothing to ask about';
-      const asking = claimCheckInput(resolved.bullets);
-      if (asking.length) {
-        try {
-          const { toolInput: verdicts } = await callClaude<{ verdicts: ClaimVerdict[] }>({
-            userId,
-            kind: 'claim_check',
-            system: CLAIM_CHECK_PROMPT,
-            content: [{ type: 'text' as const, text: JSON.stringify(asking) }],
-            tool: CLAIM_CHECK_TOOL,
-            deadline,
-          });
-          const read = flagsFromVerdicts(verdicts?.verdicts ?? [], resolved.bullets);
-          const already = new Set(flags.map((f) => f.text));
-          checked = [...flags, ...read.flags.filter((f) => !already.has(f.text))];
-          claimNote = `${asking.length} asked, ${read.flags.length} flagged, ${read.discarded} discarded`;
-        } catch (err) {
-          claimNote = `failed: ${(err as Error).message.slice(0, 40)}`;
+        const flags = checkBullets(
+          resolved.bullets,
+          [],
+          undefined,
+          undefined,
+          posting.text,
+          wholeRecord(person.profile),
+        );
+
+        let checked = flags;
+        let claimNote = 'nothing to ask about';
+        const asking = claimCheckInput(resolved.bullets);
+        if (asking.length) {
+          try {
+            const { toolInput: verdicts } = await callClaude<{ verdicts: ClaimVerdict[] }>({
+              userId,
+              kind: 'claim_check',
+              system: CLAIM_CHECK_PROMPT,
+              content: [{ type: 'text' as const, text: JSON.stringify(asking) }],
+              tool: CLAIM_CHECK_TOOL,
+              deadline,
+            });
+            const read = flagsFromVerdicts(verdicts?.verdicts ?? [], resolved.bullets);
+            const already = new Set(flags.map((f) => f.text));
+            checked = [...flags, ...read.flags.filter((f) => !already.has(f.text))];
+            claimNote = `${asking.length} asked, ${read.flags.length} flagged, ${read.discarded} discarded`;
+          } catch (err) {
+            claimNote = `failed: ${(err as Error).message.slice(0, 40)}`;
+          }
         }
+
+        const honest = applyFlags(resolved.structure, checked);
+        const guarded = validateTailored(person.profile, honest.structure, {
+          posting: posting.text,
+        });
+        const fitted = await fitToPages(guarded.structure, {
+          target: limit.target,
+          targetIsTheirs: limit.theirs,
+          cuts: cutTargets(toolInput.cutOrder, resolved.bullets, index, new Map(flags.map((f) => [f.text, f.revertTo]))),
+          posting: posting.text,
+          pinned: pins,
+          // The real compiler. This is the half pipeline.test.ts cannot do.
+          measure: async (candidate) => (await compileWithMeta(renderResumeLatex(candidate))).pages,
+          affords: () => Date.now() < deadline,
+        });
+
+        const s = fitted.structure;
+        /** Anything the pipeline is never allowed to rewrite, compared by value. */
+        const moved: string[] = [];
+        for (const before of person.profile.experience ?? []) {
+          const after = (s.experience ?? []).find((e) => e.org === before.org);
+          if (!after) continue;
+          if (after.dates !== before.dates) moved.push(`${before.org} dates`);
+          if (after.location !== before.location) moved.push(`${before.org} location`);
+        }
+        for (const before of person.profile.education ?? []) {
+          const after = (s.education ?? []).find((e) => e.school === before.school);
+          if (after && after.dates !== before.dates) moved.push(`${before.school} dates`);
+        }
+
+        runs.push({
+          who,
+          person,
+          pages: fitted.pages,
+          target: limit.target,
+          jobs: s.experience.map((e) => e.org),
+          projects: s.projects.map((p) => p.name),
+          skills: (s.skills ?? []).map((g) => g.category),
+          items: (s.skills ?? []).flatMap((g) => splitTerms(g.items ?? '')),
+          /*
+           * Thinned BY the pipeline, not arriving thin.
+           *
+           * The floor stops trimming; it does not pad. An entry the person
+           * wrote one line for keeps one line, and flagging that reported
+           * their own profile back to them as a fault.
+           */
+          thin: [...s.experience, ...s.projects]
+            .filter((e: any) => {
+              if ((e.bullets ?? []).length >= 2) return false;
+              const name = e.org ?? e.name;
+              const before = [...(person.profile.experience ?? []), ...(person.profile.projects ?? [])]
+                .find((b: any) => (b.org ?? b.name) === name);
+              return (before?.bullets ?? []).length >= 2;
+            })
+            .map((e: any) => e.org ?? e.name),
+          dropped: fitted.dropped.map((d) => `${d.section}:${d.index}`),
+          log: [...honest.log, ...surfaceRepairs(guarded.repairs).log, ...fitted.log],
+          warnings: fitted.warnings,
+          reverted: checked.length,
+          moved,
+        });
+
+        const r = runs[runs.length - 1];
+        console.log(`${who}\n   ${r.pages}/${r.target}pp  ${r.jobs!.length}j/${r.projects!.length}p/${r.skills!.length}sk  reverted=${r.reverted} (${claimNote})`);
+        if (r.thin!.length) console.log(`   THIN: ${r.thin!.join(', ')}`);
+        if (r.moved!.length) console.log(`   MOVED: ${r.moved!.join(', ')}`);
+      } catch (err) {
+        console.log(`${who}\n   DID NOT RUN: ${(err as Error).message.slice(0, 140)}`);
+        runs.push({ who, failed: (err as Error).message });
       }
-
-      const honest = applyFlags(resolved.structure, checked);
-      const guarded = validateTailored(structure, honest.structure, {
-        alsoSaid: supporting.map((f) => f.text).join(' \n '),
-        posting: postingWords,
-      });
-      const fitted = await fitToPages(guarded.structure, {
-        // The person's own rule, as the route reads it. Hard-coding one page
-        // meant this could never run for somebody whose rule says two, and
-        // Resumi has more than one person in it.
-        target: pageTarget(rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null }))),
-        cuts: cutTargets(toolInput.cutOrder, resolved.bullets, index, new Map(flags.map((f) => [f.text, f.revertTo]))),
-        posting: postingWords,
-        pinned: PINS,
-        measure: async (candidate) => (await compileWithMeta(renderResumeLatex(candidate))).pages,
-        affords: () => Date.now() < deadline,
-      });
-
-      const s = fitted.structure;
-      const result: Result = {
-        label,
-        pages: fitted.pages,
-        jobs: s.experience.map((e) => e.org),
-        projects: s.projects.map((p) => p.name),
-        skills: (s.skills ?? []).map((g) => g.category),
-        skillItems: (s.skills ?? []).map((g) => g.items).join(', '),
-        thin: [...s.experience, ...s.projects].filter((e) => (e.bullets ?? []).length < 2).map((e: any) => e.org ?? e.name),
-        coursework: (s.education ?? []).flatMap((e) => e.bullets ?? []).join(' '),
-        degree: (s.education ?? []).map((e) => `${e.degree} ${e.dates}`).join(' | '),
-        projectDates: s.projects.map((p) => String(p.dates ?? '')),
-        text: JSON.stringify(s),
-        claims: checked.length,
-        claimNote,
-        log: [...honest.log, ...surfaceRepairs(guarded.repairs).log, ...fitted.log],
-      };
-      results.push(result);
-
-      console.log(`${label}\n   ${result.pages}pg  ${result.jobs!.length}j/${result.projects!.length}p/${result.skills!.length}sk  claims=${result.claims} (${claimNote})`);
-      console.log(`   jobs:   ${result.jobs!.join(', ')}`);
-      console.log(`   skills: ${result.skills!.join(', ')}`);
-      if (result.thin!.length) console.log(`   THIN: ${result.thin!.join(', ')}`);
-    } catch (err) {
-      console.log(`${label}\n   DID NOT RUN: ${(err as Error).message.slice(0, 150)}`);
-      results.push({ label, failed: (err as Error).message });
     }
   }
 
-  // ── the report's checks ────────────────────────────────────────────────────
+  // ── what has to hold for everybody ────────────────────────────────────────
 
-  const live = results.filter((r) => !r.failed);
+  const live = runs.filter((r) => !r.failed);
 
   /*
    * A check with nothing to check is not a pass.
    *
-   * Every "does any resume break this" test is a filter over the completed
-   * runs, and a filter over an empty list is empty — so a run where every
-   * posting failed reported ten passes. It did that once, and the list was the
-   * deliverable.
+   * Every check below filters the completed runs, and a filter over an empty
+   * list is empty — so a run where every tailor failed once reported ten
+   * passes, and the list was the deliverable.
    */
   const ok = (b: boolean) => (!live.length ? 'n/a' : b ? 'PASS' : 'FAIL');
-  const some = (f: (r: Result) => boolean) => live.filter(f).map((r) => r.label.split(' / ')[1]?.slice(0, 22));
+  const offenders = (f: (r: Run) => boolean) => live.filter(f).map((r) => r.who);
   const check = (n: number, name: string, verdict: string, note = '') =>
     console.log(`${String(n).padStart(2)}. ${verdict.padEnd(5)} ${name}${note ? `\n            ${note}` : ''}`);
 
-  console.log(`\n\n══ acceptance tests, ${live.length} of ${results.length} postings completed ══\n`);
-  for (const r of results.filter((x) => x.failed)) {
-    console.log(`   DID NOT RUN  ${r.label}\n                ${String(r.failed).slice(0, 110)}\n`);
+  console.log(`\n\n══ acceptance, ${live.length} of ${runs.length} tailors completed ══\n`);
+  for (const r of runs.filter((x) => x.failed)) {
+    console.log(`   DID NOT RUN  ${r.who}\n                ${String(r.failed).slice(0, 110)}\n`);
   }
   if (!live.length) console.log('   Nothing ran, so nothing below is a pass.\n');
 
-  check(1, 'One page (11pt / 0.5in margins are template constants)', ok(!some((r) => r.pages !== 1).length),
-    some((r) => r.pages !== 1).join(', '));
+  const over = offenders((r) => r.pages !== null && r.pages! > r.target!);
+  const silent = offenders((r) => r.pages !== null && r.pages! > r.target! && !r.warnings!.some((w) => /page/i.test(w)));
+  check(1, 'Within the page limit, or the reason is given', ok(!silent.length),
+    [over.length ? `over: ${over.join(', ')}` : '', silent.length ? `silently over: ${silent.join(', ')}` : ''].filter(Boolean).join('; '));
 
-  /*
-   * Checks 2 and 3 named one employer each, from a report about one person's
-   * resume. The rule the app owes everybody is the general one — a pinned entry
-   * is never dropped — and that account is one instance of it.
-   */
-  const lost = live.flatMap((r) =>
-    PINS.filter((pin) => {
-      const where = pin.place === 'experience' ? r.jobs!.join(' | ')
-        : pin.place === 'projects' ? r.projects!.join(' | ')
-        : `${r.skillItems} ${r.skills!.join(' ')}`;
-      return !new RegExp(pin.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(where);
-    }).map((pin) => `${pin.label} off ${r.label.split(' / ')[1]?.slice(0, 18)}`),
-  );
-  check(2, 'Everything a rule pins survives on every resume',
-    PINS.length ? ok(!lost.length) : 'n/a',
-    PINS.length ? lost.join('; ') : 'no rule carries an always_include check');
+  const twice = offenders((r) => new Set(r.dropped!).size !== r.dropped!.length);
+  check(2, 'Nothing is dropped twice', ok(!twice.length), twice.join(', '));
 
-  const bp = live.find((r) => /Buying and Planning/i.test(r.label));
-  check(4, 'Celestica B&P keeps Western Bell + the cylinder bullet',
-    bp ? ok(bp.jobs!.some((j) => /Western/i.test(j)) && /cylinder/i.test(bp.text!)) : 'n/a',
-    bp ? `jobs: ${bp.jobs!.join(', ')}` : 'that posting was not in this run');
+  const repeated = offenders((r) => new Set(r.jobs!).size !== r.jobs!.length || new Set(r.projects!).size !== r.projects!.length);
+  check(3, 'Nothing is on the page twice', ok(!repeated.length), repeated.join(', '));
 
-  const fewJobs = some((r) => r.jobs!.length < 3);
-  const unreported = some((r) => r.jobs!.length < structure.experience.length && !r.log!.some((l) => /Dropped \d+ role/.test(l)));
-  check(5, '3+ jobs; any drop reported', ok(!fewJobs.length && !unreported.length),
-    [fewJobs.length ? `under 3: ${fewJobs.join(', ')}` : '', unreported.length ? `unreported: ${unreported.join(', ')}` : ''].filter(Boolean).join('; '));
+  const unreported = offenders((r) => r.dropped!.length > 0 && !r.log!.some((l) => /Dropped \d+ /.test(l)));
+  check(4, 'Every drop is reported in the log', ok(!unreported.length), unreported.join(', '));
 
-  const thin = live.filter((r) => r.thin!.length).map((r) => `${r.label.split(' / ')[1]?.slice(0, 18)} (${r.thin!.join(',')})`);
-  check(6, 'Every entry has 2+ bullets', ok(!thin.length), thin.join('; '));
+  check(5, 'Every entry keeps two or more bullets', ok(!live.some((r) => r.thin!.length)),
+    live.filter((r) => r.thin!.length).map((r) => `${r.who} (${r.thin!.join(',')})`).join('; '));
 
-  const reappeared = live.flatMap((r) =>
-    LIFTED.filter((phrase) => new RegExp(phrase, 'i').test(r.text!))
-      .map((phrase) => `"${phrase}" on ${r.label.split(' / ')[1]?.slice(0, 18)}`),
-  );
-  check(7, 'No phrase from the claim-safety table reappears', ok(!reappeared.length), reappeared.join('; '));
-  if (live.length) {
-    console.log(`            claim check: ${live.reduce((n, r) => n + (r.claims ?? 0), 0)} bullets reverted across ${live.length} resumes`);
-  }
+  const rewritten = live.filter((r) => r.moved!.length).map((r) => `${r.who}: ${r.moved!.join(', ')}`);
+  check(6, 'Dates, employers and locations are never rewritten', ok(!rewritten.length), rewritten.join('; '));
 
-  const tooMany = some((r) => r.skills!.length > 5);
-  const dupCat = some((r) => new Set(r.skills!.map((c) => c.toLowerCase())).size !== r.skills!.length);
-  const dupItem = some((r) => {
-    const items = r.skillItems!.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
-    return new Set(items).size !== items.length;
+  const overCap = offenders((r) => r.skills!.length > MAX_SKILL_LINES);
+  const dupItem = offenders((r) => {
+    const lower = r.items!.map((t) => t.toLowerCase());
+    return new Set(lower).size !== lower.length;
   });
-  const unverified = [...new Set(live.flatMap((r) => UNVERIFIED.filter((t) => new RegExp(`\\b${t}\\b`, 'i').test(r.skillItems!))))];
-  check(8, 'Skills ≤5 rows, no duplicate items or categories, verified only',
-    ok(!tooMany.length && !dupCat.length && !dupItem.length && !unverified.length),
-    [tooMany.length ? `over 5 rows: ${tooMany.join(', ')}` : '', dupCat.length ? `duplicate category: ${dupCat.join(', ')}` : '',
-     dupItem.length ? `duplicate item: ${dupItem.join(', ')}` : '',
-     unverified.length ? `in profile but unwanted: ${unverified.join(', ')}` : ''].filter(Boolean).join('; '));
-
-  const wanted = [['FastAPI', /Applied AI Engineer/i], ['Figma', /User Experience/i], ['pytest', /Test Engineer/i]] as const;
-  const missingWanted = wanted.filter(([term, where]) => {
-    const row = live.find((r) => where.test(r.label));
-    return row && !new RegExp(term, 'i').test(row.text!);
-  }).map(([term]) => term);
-  const distinct = new Set(live.map((r) => r.skillItems)).size;
-  check(9, 'Skills differ between postings; FastAPI / Figma / pytest where asked',
-    live.length < 2 ? 'n/a' : ok(distinct > 1 && !missingWanted.length),
-    live.length < 2
-      ? 'needs more than one posting to compare'
-      : `${distinct} distinct skill lists across ${live.length}${missingWanted.length ? `; missing: ${missingWanted.join(', ')}` : ''}`);
-
-  const courses = [['Intel', /Digital Systems/i], ['Electronic Art', /Linear Algebra/i]] as const;
-  const missingCourse = courses.filter(([company, course]) => {
-    const row = live.find((r) => r.label.startsWith(company));
-    return row && !course.test(row.coursework!);
-  }).map(([company]) => company);
-  const anyCourse = courses.some(([company]) => live.some((r) => r.label.startsWith(company)));
-  check(10, 'Intel lists Digital Systems; EA lists Linear Algebra',
-    anyCourse ? ok(!missingCourse.length) : 'n/a',
-    anyCourse ? (missingCourse.length ? `missing on: ${missingCourse.join(', ')}` : '') : 'neither posting was in this run');
-
-  check(12, 'Degree reads "Sep 2023 – Apr 2028 (Expected)" and "(Co-op)"',
-    ok(live.every((r) => /Apr 2028/.test(r.degree!) && /Co-?op/i.test(r.degree!))),
-    live[0]?.degree ?? '');
+  const notTheirs = live.flatMap((r) => {
+    const theirs = new Set((r.person!.profile.skills ?? []).flatMap((g) => splitTerms(g.items ?? '')).map((t) => t.toLowerCase()));
+    return r.items!.filter((t) => !theirs.has(t.toLowerCase())).map((t) => `"${t}" on ${r.who}`);
+  });
+  check(7, `Skills ≤${MAX_SKILL_LINES} lines, nothing twice, nothing they never claimed`,
+    ok(!overCap.length && !dupItem.length && !notTheirs.length),
+    [overCap.length ? `over the cap: ${overCap.join(', ')}` : '',
+     dupItem.length ? `listed twice: ${dupItem.join(', ')}` : '',
+     notTheirs.length ? `not theirs: ${notTheirs.slice(0, 6).join('; ')}` : ''].filter(Boolean).join('; '));
 
   /*
-   * Reverse chronological, by the same reading recencyKey uses: a date with no
-   * month counts as the END of its year, so a project dated "2026" sits above
-   * one finished in August 2026.
+   * Two postings for one person should not produce one resume. A tailor that
+   * returns the same selection whatever the job is not tailoring.
    */
-  const outOfOrder = live.filter((r) => {
-    const dates = r.projectDates!;
-    const key = (d: string) => {
-      if (/present|current/i.test(d)) return Number.MAX_SAFE_INTEGER;
-      const years = d.match(/(20\d{2})/g);
-      if (!years) return 0;
-      const year = Number(years[years.length - 1]);
-      const month = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.exec(d.slice(d.lastIndexOf(years[years.length - 1]) - 9));
-      const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-      return year * 12 + (month ? months.indexOf(month[1].toLowerCase()) + 1 : 12);
-    };
-    for (let i = 1; i < dates.length; i += 1) if (key(dates[i]) > key(dates[i - 1])) return true;
-    return false;
-  }).map((r) => r.label.split(' / ')[1]?.slice(0, 20));
-  check(14, 'Projects in reverse chronological order', ok(!outOfOrder.length), outOfOrder.join(', '));
+  const varied = PEOPLE.map((p) => {
+    const mine = live.filter((r) => r.person?.name === p.name);
+    return mine.length < 2 ? null : new Set(mine.map((r) => r.items!.join('|'))).size > 1;
+  }).filter((v): v is boolean => v !== null);
+  check(8, 'One person\'s two postings tailor differently',
+    varied.length ? ok(varied.every(Boolean)) : 'n/a',
+    varied.length ? `${varied.filter(Boolean).length} of ${varied.length} people` : 'needs both postings per person');
 
-  console.log('\n11, 13, 15 and 16 are not readable from the tailor pipeline: the header is rendering (compile a');
-  console.log('resume and read the PDF), the remote flag and title variant are profile fields, filenames are');
-  console.log('lib/filename.ts, and the revision test needs the edit route. Reported separately.');
+  const reverts = live.reduce((n, r) => n + (r.reverted ?? 0), 0);
+  check(9, 'Revert churn stays under two bullets a resume',
+    live.length ? ok(reverts / live.length < 2) : 'n/a',
+    `${reverts} reverted across ${live.length} resumes (${(reverts / Math.max(1, live.length)).toFixed(1)} each)`);
+
+  const idle = offenders((r) => r.dropped!.length === 0 && r.log!.length === 0);
+  check(10, 'The fitter was exercised by most of the matrix',
+    live.length ? ok(idle.length <= live.length / 2) : 'n/a',
+    idle.length ? `did nothing on: ${idle.join(', ')}` : '');
 }
 
 main().catch((err) => {

@@ -214,9 +214,26 @@ test('cuts that never reach the target are all put back, and said so', async () 
   assert.equal(result.structure.projects.length, 2, 'the full resume is what saves');
   assert.deepEqual(bulletsOf(result.structure), bulletsOf(RESUME));
   assert.deepEqual(result.log, []);
-  assert.match(result.warnings[0], /runs to 2 pages and your rules ask for one page/);
   assert.match(result.warnings[0], /will not fit/);
   assert.match(result.warnings[0], /Two pages, or take something off yourself/);
+
+  /*
+   * And the limit is attributed to whoever set it.
+   *
+   * Every sentence that reported a limit said "your rules ask for", including
+   * for the majority who have written no rule about length — the app supplied
+   * the default and then put it in their mouth.
+   */
+  assert.match(result.warnings[0], /runs to 2 pages and Resumi keeps resumes to one page/);
+
+  const theirs = await fitToPages(RESUME, {
+    target: 1,
+    targetIsTheirs: true,
+    cuts: [drop('projects', 'MealApp', 'Feb 2025'), cut('job three')],
+    measure: async () => 2,
+    affords: always,
+  });
+  assert.match(theirs.warnings[0], /runs to 2 pages and your rules ask for one page/);
 });
 
 test('an entry is never trimmed below two bullets', async () => {

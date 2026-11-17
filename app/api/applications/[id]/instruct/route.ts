@@ -14,7 +14,7 @@ import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
-import { pageTarget, type RuleCheck } from '../../../../lib/rules';
+import { limitPhrase, pageLimit, type RuleCheck } from '../../../../lib/rules';
 import { frozenLine, onlyWhereAsked, readScope } from '../../../../lib/scope';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
@@ -154,6 +154,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const structure = current.structure as ResumeStructure;
   const profileStructure = (profile?.resumeStructure ?? null) as ResumeStructure | null;
   const posting = record.posting;
+  /** Their page limit, and whether a rule of theirs actually set it. */
+  const limit = () => pageLimit(rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })));
+
   /** The posting as one string, for everything that scores relevance against it. */
   const postingText = [posting?.description ?? '', ((posting?.requirements as string[]) ?? []).join(' ')].join(' \n ');
 
@@ -282,9 +285,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     const restored = withRestored(structure, restore.entries);
     const fitted = await fitToPages(restored, {
-      target: pageTarget(
-        rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
-      ),
+      target: limit().target,
+      targetIsTheirs: limit().theirs,
       cuts: [],
       posting: postingText,
       pinned: pins,
@@ -699,9 +701,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * everything below treats "not measured" as not a failure, the same way
      * the fitter does.
      */
-    const target = pageTarget(
-      rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
-    );
+    const { target, theirs: targetIsTheirs } = limit();
     const measure = async (candidate: ResumeStructure) => {
       try {
         return (await compileWithMeta(renderResumeLatex(candidate))).pages;
@@ -729,6 +729,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const refit = restore
       ? await fitToPages(edited, {
           target,
+          targetIsTheirs,
           cuts: [],
           posting: postingText,
           pinned: alsoPinned(restore.entries.map((e) => pinEntry(e.section, e.name))),
@@ -762,8 +763,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const overLong =
       pages !== null && pages > target
         ? [
-            `This now runs to ${pages === 1 ? 'one page' : `${pages} pages`} and your rules ask for ` +
-              `${target === 1 ? 'one page' : `${target} pages`}. Nothing was taken off to get under it — an edit ` +
+            `This now runs to ${pages === 1 ? 'one page' : `${pages} pages`} and ` +
+              `${limitPhrase(target, targetIsTheirs)}. Nothing was taken off to get under it — an edit ` +
               'changes what you asked about and leaves the rest alone. Tailor again to fit it, or say what should go.',
           ]
         : [];
@@ -844,7 +845,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         // row is the kind of change somebody finds in the PDF days later.
         ...(capped?.dropped.length
           ? [
-              `Technical Skills was ${capped.dropped.length + MAX_SKILL_LINES} lines; your rules ask for ` +
+              `Technical Skills was ${capped.dropped.length + MAX_SKILL_LINES} lines; Resumi keeps it to ` +
                 `${MAX_SKILL_LINES} or fewer, so ${capped.dropped.join(', ')} went — ` +
                 `${capped.dropped.length === 1 ? 'the line' : 'the lines'} this posting mentions least.`,
             ]

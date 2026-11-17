@@ -124,8 +124,29 @@ export const DEFAULT_PAGE_TARGET = 2;
  * and the app cuts to fit what this returns.
  */
 export function pageTarget(rules: CheckableRule[]): number {
+  return pageLimit(rules).target;
+}
+
+/**
+ * The page limit, and whether the person actually asked for it.
+ *
+ * The number alone was not enough, because everything that reports it says
+ * "your rules ask for one page" — and for somebody with no page rule the app
+ * supplies the default and then attributes it to them. Being told your own
+ * rule said something it never said is the kind of small untruth that makes a
+ * person stop believing the rest of the panel.
+ */
+export function pageLimit(rules: CheckableRule[]): { target: number; theirs: boolean } {
   const limits = rules
     .map((r) => (r.check?.kind === 'max_pages' ? r.check.limit : null))
     .filter((n): n is number => typeof n === 'number' && n > 0);
-  return limits.length ? Math.min(...limits) : DEFAULT_PAGE_TARGET;
+  return limits.length
+    ? { target: Math.min(...limits), theirs: true }
+    : { target: DEFAULT_PAGE_TARGET, theirs: false };
+}
+
+/** "your rules ask for one page", or the truth when no rule said so. */
+export function limitPhrase(target: number, theirs: boolean): string {
+  const pages = target === 1 ? 'one page' : `${target} pages`;
+  return theirs ? `your rules ask for ${pages}` : `Resumi keeps resumes to ${pages}`;
 }

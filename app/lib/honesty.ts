@@ -684,7 +684,8 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
       ...flags.map((f) => `A rewritten bullet ${f.reason}, so ${f.revertTo ? 'your own wording was put back' : 'it was removed'}: "${f.text}"`),
       ...(thinned.length
         ? [
-            `${thinned.join(', ')} ${thinned.length === 1 ? 'has' : 'have'} only one line left, and your rules ask for two. ` +
+            // Two bullets is MIN_BULLETS in fit.ts, not something they wrote.
+            `${thinned.join(', ')} ${thinned.length === 1 ? 'has' : 'have'} only one line left, and Resumi keeps at least two. ` +
               `Add a fact in the change box or tailor again, and ${thinned.length === 1 ? 'it' : 'they'} will fill back out.`,
           ]
         : []),

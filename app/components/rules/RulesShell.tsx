@@ -51,7 +51,7 @@ export interface Rule {
 const EXAMPLES = [
   'Never use the word "spearheaded".',
   'Keep every bullet to one line — two at the absolute most.',
-  'Call it Ontario Tech, never UOIT.',
+  'Write my school\u2019s name in full, never the abbreviation.',
   'Lead with impact, then the technology, never the other way round.',
   'Do not put my GPA on anything.',
 ];

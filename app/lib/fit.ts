@@ -2,6 +2,7 @@ import { namesEntry, splitTerms } from './names';
 import { missingPins, pinnedOverLine, type Pin } from './pins';
 import type { CutTarget } from './provenance';
 import { patternFor, waysOfWriting } from './requirementMatch';
+import { limitPhrase } from './rules';
 import type { ResumeStructure } from './types';
 
 /**
@@ -128,6 +129,13 @@ export const MAX_SKILL_LINES = 5;
 export interface FitOptions {
   /** How many pages it may run to. From the person's rules; two by default. */
   target: number;
+  /**
+   * Whether `target` came from one of their rules.
+   *
+   * Only ever used for wording. Absent means the app chose the number, which
+   * is what every caller that does not pass it is doing.
+   */
+  targetIsTheirs?: boolean;
   /** What may go, least relevant first. */
   cuts: CutTarget[];
   /**
@@ -712,7 +720,14 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   structure = capped.structure;
   const capLog = capped.dropped.length
     ? [
-        `Technical Skills was ${capped.dropped.length + MAX_SKILL_LINES} lines; your rules ask for ${MAX_SKILL_LINES} or fewer, so ` +
+        /*
+         * The app's own number, said as the app's own.
+         *
+         * This read "your rules ask for 5 or fewer" for everybody, including
+         * the great majority who have never written a rule about skills.
+         * MAX_SKILL_LINES is a constant in this file.
+         */
+        `Technical Skills was ${capped.dropped.length + MAX_SKILL_LINES} lines; Resumi keeps it to ${MAX_SKILL_LINES} or fewer, so ` +
           `${capped.dropped.join(', ')} ${capped.dropped.length === 1 ? 'went' : 'went'} — ${capped.dropped.length === 1 ? 'the line' : 'the lines'} this posting mentions least.`,
       ]
     : [];
@@ -726,7 +741,8 @@ export async function fitToPages(structure: ResumeStructure, opts: FitOptions): 
   if (pages === null) return { ...unchanged, pages: null };
   if (pages <= opts.target) return { ...unchanged, pages };
 
-  const tooLong = `This runs to ${pagesWord(pages)} and your rules ask for ${pagesWord(opts.target)}.`;
+  // Attributed to a rule only when a rule said it. See rules.ts/limitPhrase.
+  const tooLong = `This runs to ${pagesWord(pages)} and ${limitPhrase(opts.target, opts.targetIsTheirs ?? false)}.`;
 
   const all = usableCuts(structure, opts.cuts, opts.posting ?? '');
   const ranked = all.ranked;

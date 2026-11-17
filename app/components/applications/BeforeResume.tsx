@@ -204,7 +204,7 @@ export default function BeforeResume({
         <div aria-hidden="true" className="rounded-md border border-accent-line bg-accent-tint p-[15px] opacity-60">
           <span className="text-[11px] uppercase tracking-[0.12em] text-ink-faint">Change something</span>
           <div className="mt-2.5 rounded border border-rule-field bg-ground-surface px-3 py-2.5 text-[13.5px] text-ink-ghost">
-            Make the FraudWatch bullets shorter&hellip;
+            Make the longest bullets shorter&hellip;
           </div>
           <span className="mt-2.5 block text-[12px] text-ink-muted">Ready when your resume is.</span>
         </div>

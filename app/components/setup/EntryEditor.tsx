@@ -77,7 +77,7 @@ const COPY: Record<string, Copy> = {
   education: {
     addLabel: 'Add education',
     titleLabel: 'Field of study', orgLabel: 'School',
-    titlePlaceholder: 'Software Engineering', orgPlaceholder: 'Ontario Tech University',
+    titlePlaceholder: 'Software Engineering', orgPlaceholder: 'Your college or university',
     placeLabel: 'Location',
     linesLabel: 'Coursework, honours, anything worth naming',
     linesBlurb:
@@ -87,7 +87,7 @@ const COPY: Record<string, Copy> = {
   project: {
     addLabel: 'Add a project',
     titleLabel: 'Project name', orgLabel: 'Context',
-    titlePlaceholder: 'Resumi', orgPlaceholder: 'Personal project',
+    titlePlaceholder: 'What you called it', orgPlaceholder: 'Personal project',
     placeLabel: 'Location',
     linesLabel: 'What you did',
     linesBlurb: LINES_BLURB,
@@ -96,7 +96,7 @@ const COPY: Record<string, Copy> = {
   awards: {
     addLabel: 'Add an award',
     titleLabel: 'Award', orgLabel: 'Awarded by',
-    titlePlaceholder: "Dean's Honour List", orgPlaceholder: 'Ontario Tech University',
+    titlePlaceholder: "Dean's Honour List", orgPlaceholder: 'Your college or university',
     placeLabel: 'Where it was awarded',
     linesLabel: 'Details',
     linesBlurb: 'What it was for, if the name does not already say. Most awards need none.',

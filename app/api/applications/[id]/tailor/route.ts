@@ -23,7 +23,7 @@ import { compileWithMeta } from '../../../../server/pdf';
 import { fitToPages } from '../../../../lib/fit';
 import { pinsFromRules, type Pin } from '../../../../lib/pins';
 import { CLAIM_CHECK_ESTIMATE_MS, COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
-import { pageTarget, type RuleCheck } from '../../../../lib/rules';
+import { pageLimit, type RuleCheck } from '../../../../lib/rules';
 import {
   getActiveRules,
   getUser,
@@ -358,10 +358,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
      * decided against the compiler's own page count, and if spending all of it
      * still does not reach the target then none of it is spent.
      */
+    const limit = pageLimit(rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })));
     const fitted = await fitToPages(guarded.structure, {
-      target: pageTarget(
-        rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })),
-      ),
+      target: limit.target,
+      // So an over-long warning says "your rules ask for" only when they did.
+      targetIsTheirs: limit.theirs,
       // For ranking the skills lines. The model ranks entries; a skills line
       // the app can score itself — by how many of its own tools this employer
       // actually mentions, read off the posting's whole text.

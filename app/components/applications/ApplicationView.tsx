@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { ResumeStructure } from '../../lib/types';
+import { editExamples, editPlaceholder } from '../../lib/examples';
 import DownloadPdf from './DownloadPdf';
 import Stages from '../Stages';
 import { INSTRUCT_STEPS, REASSURE } from '../../lib/waits';
@@ -849,7 +850,7 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                     value={instruction}
                     onChange={(e) => setInstruction(e.target.value)}
                     disabled={editing || busy}
-                    placeholder={asking ? 'Your answer…' : 'Make the FraudWatch bullets shorter…'}
+                    placeholder={asking ? 'Your answer…' : editPlaceholder(resume.structure)}
                     className="[field-sizing:content] max-h-[10lh] w-full resize-none rounded border border-rule-field bg-ground-surface px-3 py-2.5 text-[13.5px] leading-relaxed outline-none transition placeholder:text-ink-ghost focus:border-accent disabled:opacity-60"
                   />
                   <div className="flex flex-wrap gap-1.5">
@@ -861,7 +862,15 @@ export default function ApplicationView({ applicationId, isLatest, startTailor, 
                       bullets. Fitting to a page is the app's job, not an
                       instruction — it comes back when the app measures pages.
                     */}
-                    {['drop the second bullet', 'lead with the Python work', 'shorten the Aegon bullets'].map((example) => (
+                    {/*
+                      Written from this resume, not from the one the app was
+                      built with. These were three fixed strings naming a
+                      stranger's employer and project, which every person who
+                      opened this box was shown as the example of what to
+                      type. An example that names something on the page can
+                      also simply be pressed. See lib/examples.ts.
+                    */}
+                    {editExamples(resume.structure).map((example) => (
                       <button
                         key={example}
                         type="button"
