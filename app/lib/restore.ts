@@ -1,6 +1,6 @@
 import { patternFor } from './requirementMatch';
 import { namedAtStart, namesEntry, spanFor, waysOfNaming } from './names';
-import type { DroppedEntry } from './fit';
+import { droppedKey, type DroppedEntry } from './fit';
 
 /**
  * Reading "put Droady back" out of a sentence.
@@ -290,7 +290,57 @@ export function couldComeBack(
   const taken = new Set<string>();
   for (const d of dropped) taken.add(`${d.section}:${key(d.name)}`);
 
-  const out = [...dropped];
+  /*
+   * The stored list, with anything recorded twice read once.
+   *
+   * Eleven real rows carry the same entry twice, from a fitter that offered
+   * one index to two passes. The restore itself survived it — `withRestored`
+   * will not splice a second copy of something already on the page — but the
+   * list is also what the model is shown as available, and "Not on this
+   * resume, and available: Kudi Kitchen, Kudi Kitchen" is the app telling
+   * somebody it has two of their project.
+   *
+   * Read-time rather than a migration: the rows are not broken, only
+   * repetitive, and a dedupe here fixes every row that exists and every row
+   * written before this shipped.
+   */
+  /*
+   * And anything the person has since renamed or deleted, dropped.
+   *
+   * A dropped record is identified by name and dates, because that is the
+   * strongest identity in a ResumeStructure — see fit.ts/droppedKey. Edit the
+   * entry and the record orphans: it still describes a job the person had,
+   * under a name they no longer use, holding the text as it was printed
+   * months ago. Offered alongside the profile's own copy, the person is shown
+   * their entry twice and asked which they meant.
+   *
+   * So a record that matches nothing in the profile and nothing on the page
+   * is not offered. Deleting an entry is also a decision, and bringing one
+   * back from bookkeeping after somebody removed it is worse than forgetting
+   * it. Skipped entirely when there is no profile to compare against, where
+   * the dropped list is the only thing that knows.
+   */
+  const inProfile = new Set<string>();
+  for (const section of ['experience', 'projects'] as const) {
+    for (const entry of ((profile?.[section] as any[]) ?? [])) {
+      inProfile.add(droppedKey({ section, name: String((section === 'experience' ? entry?.org : entry?.name) ?? ''), entry }));
+    }
+  }
+  const onPage = new Set<string>();
+  for (const section of ['experience', 'projects'] as const) {
+    for (const entry of ((onThePage?.[section] as any[]) ?? [])) {
+      onPage.add(droppedKey({ section, name: String((section === 'experience' ? entry?.org : entry?.name) ?? ''), entry }));
+    }
+  }
+
+  const seen = new Set<string>();
+  const out = dropped.filter((d) => {
+    const id = droppedKey(d);
+    if (seen.has(id)) return false;
+    if (profile && !inProfile.has(id) && !onPage.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   for (const section of ['experience', 'projects'] as const) {
     const here = new Set(
       ((onThePage?.[section] as any[]) ?? []).map((e) =>

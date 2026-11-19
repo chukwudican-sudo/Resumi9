@@ -151,3 +151,65 @@ test('a bullet whose only source is blank is left alone', () => {
   assert.deepEqual(flags, []);
   assert.equal(discarded, 1);
 });
+
+// ── what the Nov 16 run reverted that it should not have ──────────────────
+
+test('an inflection of a word the source uses is not unsupported', () => {
+  /*
+   * Real reverts from one tailor: "systematically" against a profile reading
+   * "systematic root-cause debugging", and "Investigated and" against one
+   * reading "documenting the investigation and fix". Both threw away the
+   * whole rewritten sentence. This file compared letters and digits with no
+   * stemmer, while honesty.ts had one for exactly this reason.
+   */
+  const source = 'Found and fixed a subtle timing bug through systematic root-cause debugging, documenting the investigation and fix as a written case study';
+  const written = 'Investigated and fixed a subtle timing bug, debugging systematically and documenting the fix';
+  const { flags, discarded } = flagsFromVerdicts(
+    [
+      { bullet: written, quote: source, unsupported: 'systematically' },
+      { bullet: written, quote: source, unsupported: 'Investigated and' },
+    ],
+    [bullet({ text: written, evidence: [source] })],
+  );
+  assert.deepEqual(flags, [], 'both words are in the source in another form');
+  assert.equal(discarded, 2);
+});
+
+test('a span sitting word for word in the source is not unsupported', () => {
+  /*
+   * Only the QUOTE was ever checked against the evidence. Nothing checked
+   * the span, so a verdict could name text verbatim from the person's own
+   * profile and the app would revert their sentence for containing it.
+   */
+  const source = 'Kept three independently developed system components integrated cleanly by defining and maintaining the shared data contract between them';
+  const { flags, discarded } = flagsFromVerdicts(
+    [{ bullet: source, quote: source, unsupported: 'maintaining the shared data contract' }],
+    [bullet({ text: source, evidence: [source] })],
+  );
+  assert.deepEqual(flags, []);
+  assert.equal(discarded, 1);
+});
+
+test('a real invention still comes back, with the span to cut', () => {
+  const source = 'Redesigned an offline-sync retry scheduler to fire against the next real retry time';
+  const written = `${source} under tight latency constraints`;
+  const { flags } = flagsFromVerdicts(
+    [{ bullet: written, quote: source, unsupported: 'under tight latency constraints' }],
+    [bullet({ text: written, evidence: [source] })],
+  );
+  assert.equal(flags.length, 1);
+  assert.equal(flags[0].cut, 'under tight latency constraints', 'located verbatim, so the clause can be cut');
+  assert.equal(flags[0].revertTo, source);
+});
+
+test('a span the model repunctuated is still located in the bullet', () => {
+  const source = 'Built and compared three backend rate-limiting algorithms from scratch';
+  const written = 'Built and compared three backend rate-limiting algorithms, validating output and tracking discrepancies';
+  const { flags } = flagsFromVerdicts(
+    // The model answers in its own spacing and casing.
+    [{ bullet: written, quote: source, unsupported: 'validating  output  and' }],
+    [bullet({ text: written, evidence: [source] })],
+  );
+  assert.equal(flags.length, 1);
+  assert.equal(flags[0].cut, 'validating output and');
+});

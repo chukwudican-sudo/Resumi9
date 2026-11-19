@@ -1,5 +1,5 @@
 import type { ResolvedBullet } from './provenance';
-import type { Flag } from './honesty';
+import { stem, type Flag } from './honesty';
 
 /**
  * A second reading of each rewritten bullet, against the source it names.
@@ -104,8 +104,26 @@ export function claimCheckInput(bullets: readonly ResolvedBullet[]): {
     .map((b) => ({ bullet: b.text, sources: b.context.trim() ? [...b.evidence, b.context] : b.evidence }));
 }
 
-/** Letters, digits and single spaces — for comparing text that may be respaced. */
-const loose = (text: string) => (text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/**
+ * Letters, digits and single spaces, each word reduced to its root.
+ *
+ * The stemming is not decoration. Without it this compared inflections as
+ * different words and reverted bullets for saying what their source says:
+ * "systematically" against a profile reading "systematic root-cause
+ * debugging", and "Investigated and" against one reading "documenting the
+ * investigation". Both were whole-sentence reverts of an evidenced rewrite,
+ * and `honesty.ts` had a stemmer for exactly this reason that this file did
+ * not use.
+ */
+const loose = (text: string) =>
+  (text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map(stem)
+    .join(' ');
 
 /** Whether `needle` is really in `haystack`, allowing for punctuation drift. */
 const inside = (haystack: string, needle: string) => {
@@ -113,6 +131,33 @@ const inside = (haystack: string, needle: string) => {
   const bit = loose(needle);
   return bit.length > 0 && hay.includes(bit);
 };
+
+/**
+ * The span as the BULLET punctuated it, for cutting rather than reverting.
+ *
+ * The model answers with its own spacing and casing, and a span that is not
+ * a literal substring cannot be excised — so the characters are found back
+ * in the bullet by comparing word by word on the same loose reading the
+ * check itself uses. Null when it cannot be located exactly, which leaves
+ * the caller to revert the whole sentence as before.
+ */
+function spanIn(bullet: string, said: string): string | null {
+  if (bullet.includes(said)) return said;
+
+  const want = loose(said);
+  if (!want) return null;
+  const words = [...bullet.matchAll(/\S+/g)];
+  for (let i = 0; i < words.length; i += 1) {
+    for (let j = i; j < words.length; j += 1) {
+      const from = words[i].index ?? 0;
+      const to = (words[j].index ?? 0) + words[j][0].length;
+      const slice = bullet.slice(from, to);
+      if (loose(slice) === want) return slice;
+      if (loose(slice).length > want.length + 24) break;
+    }
+  }
+  return null;
+}
 
 /**
  * The verdicts that survive checking, as flags the honesty pass can apply.
@@ -159,6 +204,26 @@ export function flagsFromVerdicts(
       continue;
     }
 
+    /*
+     * A span the source already contains cannot be unsupported.
+     *
+     * Only the QUOTE was ever checked against the evidence — whether the
+     * model had invented the sentence it claimed to be weighing. Nothing
+     * checked the other half, so a verdict could name a span sitting word
+     * for word in the person's own bullet and the app would revert their
+     * sentence for containing it. Observed on a real run: "Maintained data
+     * integrity across" flagged against a profile that says "maintaining the
+     * shared data contract", and a whole FraudWatch sentence flagged while
+     * being verbatim from the profile.
+     *
+     * This is the cheapest check in the file and it is the one that was
+     * missing: both halves verifiable was the whole design.
+     */
+    if (inside(evidence, said)) {
+      discarded += 1;
+      continue;
+    }
+
     // Nothing to put back. Dropping a sentence on a judgement is for the
     // unsourced case, which this is not: these bullets all have a source.
     const fallback = bullet.evidence[0] ?? '';
@@ -171,6 +236,9 @@ export function flagsFromVerdicts(
     flags.push({
       text: bullet.text,
       revertTo: fallback,
+      // Where the span can be located exactly, the caller cuts it instead of
+      // discarding the sentence around it. See honesty.ts/withoutSpan.
+      cut: spanIn(bullet.text, said) ?? undefined,
       reason: `says "${said.replace(/^[\s,;:—-]+|[\s,;:.—-]+$/g, '')}", which ${sourceLabel} does not`,
     });
   }

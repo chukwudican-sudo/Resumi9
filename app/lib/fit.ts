@@ -193,12 +193,55 @@ export interface FitResult {
 /** An entry the app removed, and where it was. */
 export interface DroppedEntry {
   section: Section;
-  /** Its position in that section before anything was cut. */
+  /**
+   * Where it sat before anything was cut — a placement hint, never identity.
+   *
+   * `withRestored` uses it to put an entry back roughly where it was rather
+   * than at the end. It is NOT what tells two dropped entries apart: the list
+   * accumulates across versions, and an index means a different position in
+   * each of them. See `droppedKey`.
+   */
   index: number;
   /** What to call it. */
   name: string;
   /** The entry itself, verbatim — never a summary of it. */
   entry: unknown;
+}
+
+/**
+ * What tells one dropped entry from another.
+ *
+ * `section:index` was doing this job and cannot: the dropped list is carried
+ * forward from version to version and added to, so an index refers to the
+ * section as it stood when that entry was cut, not as it stands now. Three
+ * real rows ended up holding two DIFFERENT entries at projects:2 — a project
+ * cut on one version, another cut on a later one after the list had
+ * shortened. Restoring either would have cleared both records, because the
+ * code that clears them matches on the position, and the other entry would
+ * then have been unrestorable with nothing saying why.
+ *
+ * The name and the dates, which is the same identity `takeEntry` and the
+ * tailoring guard already match entries on. Two genuinely identical entries
+ * in one section are one entry recorded twice, which is the other thing this
+ * fixes.
+ *
+ * **This is not the identity it should be, and the gap is worth naming.** A
+ * row in `profile_entries` has a real id; `ResumeStructure` does not carry
+ * it, and `annotate` mints `e0`/`p2` from array position at tailor time. So
+ * the strongest identity available to anything downstream is what the entry
+ * is called and when it happened — and an entry renamed or redated between
+ * being cut and being asked back no longer matches its own record.
+ *
+ * What that costs is bounded rather than silent: `couldComeBack` offers the
+ * profile as well as the dropped list, so a renamed entry is still offered,
+ * under its new name, from the profile. The stale record is filtered there
+ * rather than left to surface as a second copy under the old one. Carrying
+ * the real id into the structure is a data-model change and belongs with the
+ * rest of them.
+ */
+export function droppedKey(dropped: Pick<DroppedEntry, 'section' | 'name' | 'entry'>): string {
+  const dates = ((dropped.entry ?? {}) as { dates?: unknown }).dates;
+  return `${dropped.section}:${norm(dropped.name)}|${norm(typeof dates === 'string' ? dates : '')}`;
 }
 
 const pagesWord = (n: number) => (n === 1 ? 'one page' : `${n} pages`);

@@ -35,6 +35,101 @@ export interface Flag {
   revertTo: string;
   /** One clause, for the change log. "claims code reviews" */
   reason: string;
+  /**
+   * The exact span that is unsupported, when the check could name one.
+   *
+   * A whole-bullet revert throws away the tailoring along with the problem.
+   * Measured across eight profiles and sixteen postings: the model rewrote
+   * 29% of printed bullets and 7% survived — the checks took back twenty-two
+   * points, and most of what they took back was evidenced. Where the fault is
+   * one clause, cutting the clause keeps the rest of the rewrite.
+   *
+   * Absent means the fault is the whole sentence, and `revertTo` is the only
+   * answer.
+   */
+  cut?: string;
+}
+
+/**
+ * One bullet with an unsupported clause removed, or null if that reads badly.
+ *
+ * Excising a span is only an improvement when what remains is a sentence.
+ * "Built three detection algorithms in Java and" is worse than putting the
+ * person's own line back, so every way that can happen is a reason to decline
+ * here and let the caller fall back.
+ */
+export function withoutSpan(text: string, span: string): string | null {
+  const at = text.indexOf(span);
+  if (at < 0) return null;
+
+  let out = `${text.slice(0, at)}${text.slice(at + span.length)}`
+    // Join what the removal left either side of it.
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .replace(/([,;:])\s*([,.;:])/g, '$2')
+    .replace(/\(\s*\)/g, '')
+    .trim();
+
+  // A trailing joiner or preposition is the commonest wreckage.
+  out = out.replace(/[\s,;:]*\b(and|or|but|with|by|for|to|in|on|at|of|from|using|while|through|via|that|which)\b[\s,;:]*$/i, '');
+  out = out.replace(/[\s,;:]+$/, '');
+
+  if (!out) return null;
+
+  /*
+   * A span that ENDS on a preposition takes its object with it.
+   *
+   * Seen on a real run: "Cached station reads to cut page load to one query
+   * instead of forty" lost "cut page load to" and became "Cached station
+   * reads to one query instead of forty" — grammatical nonsense, printed on
+   * somebody's resume. The verb the rest of the sentence hung on went with
+   * the span, and nothing downstream could tell.
+   *
+   * Starting on a preposition is fine and common: "via REST API" and "in
+   * React" are clean removals. It is the dangling end that breaks the join.
+   */
+  if (/\b(to|for|with|in|on|at|of|from|into|across|by|than|as)\s*$/i.test(span.trim())) return null;
+
+  /*
+   * And a cut that leaves a trailing clause with nothing in it.
+   *
+   * "…, strengthening writing and editing skills" lost "writing and editing"
+   * and became "…, strengthening skills" — grammatical, and empty. The
+   * person's own sentence is better than a hollowed-out version of the
+   * rewrite, so this is one of the cases the fallback is for.
+   */
+  const tail = out.split(/[,;]/).pop()?.trim() ?? '';
+  if (tail && tail !== out && tail.split(/\s+/).filter(Boolean).length < 3) return null;
+
+  /*
+   * And a cut that takes the opening verb's object away from it.
+   *
+   * "Coordinated audience messaging across two seasonal campaigns" lost
+   * "audience messaging" and became "Coordinated across two seasonal
+   * campaigns" — the verb left holding a preposition. Narrow on purpose: it
+   * only refuses when the span sat directly after the first word and a
+   * preposition closes over the gap, which is the one shape that strands a
+   * leading verb. A span deeper in the sentence, or one followed by an
+   * article, is the ordinary clean removal.
+   */
+  const head = text.trimStart().split(/\s+/)[0] ?? '';
+  const startsRightAfterTheVerb = text.trimStart().slice(head.length).trimStart().startsWith(span.trim());
+  const closesWithPreposition = /^(to|for|with|in|on|at|of|from|into|across|by|than|as)\b/i.test(
+    text.slice(text.indexOf(span) + span.length).trim(),
+  );
+  if (startsRightAfterTheVerb && closesWithPreposition) return null;
+  // Nothing left worth printing, or so little that the bullet lost its point.
+  if (out.length < 25 || out.length < text.length * 0.45) return null;
+  // A sentence starts with a word, not a conjunction or a stray mark.
+  if (/^[\s,;:.)\]]/.test(out)) return null;
+  if (/^\b(and|or|but|with|by|for|to|in|on|at|of|from)\b/i.test(out)) return null;
+  // Brackets and quotes have to balance, or the removal cut one of a pair.
+  for (const [open, close] of [['(', ')'], ['[', ']']] as const) {
+    if ((out.split(open).length - 1) !== (out.split(close).length - 1)) return null;
+  }
+  if ((out.split('"').length - 1) % 2 !== 0) return null;
+
+  return `${out.charAt(0).toUpperCase()}${out.slice(1)}`;
 }
 
 /**
@@ -221,8 +316,28 @@ export function wholeRecord(
  * thirds theirs instead of five sixths, and the test below fails them for
  * having conjugated a verb differently.
  */
-const stem = (word: string): string =>
+export const stem = (word: string): string =>
   word
+    /*
+     * The adverb and the adjective are one word.
+     *
+     * "systematically" against a profile reading "systematic root-cause
+     * debugging" was reverted as an unsupported claim — a whole rewritten
+     * sentence thrown away over a suffix. Done before the others because
+     * -ally has to come off in one step: stripping the -ly first leaves
+     * "systematical", which stems no further.
+     */
+    .replace(/(?<=.{4})ically$/, 'ic')
+    .replace(/(?<=.{4})ally$/, 'al')
+    .replace(/(?<=.{4})ly$/, '')
+    /*
+     * The verb and the noun for the same act, likewise. "Investigated and"
+     * was flagged against a source reading "documenting the investigation",
+     * which is the person describing the same work in the other part of
+     * speech — the one rewrite the rules explicitly allow.
+     */
+    .replace(/(?<=.{4})ations?$/, 'ate')
+    .replace(/(?<=.{4})ions?$/, 'e')
     .replace(/(?<=.{4})ing$/, '')
     .replace(/(?<=.{4})ed$/, '')
     // "strategies" and "strategy" are one word, and dropping the s alone
@@ -578,6 +693,9 @@ export function checkBullets(
       flags.push({
         text: bullet.text,
         revertTo: fallback,
+        // `lifted` slices its span out of the bullet, so it is already
+        // verbatim and can be cut rather than reverted around.
+        cut: echoed,
         reason: `takes "${echoed}" from the posting, which ${sourceLabel === 'your profile' ? 'your profile' : sourceLabel} does not say`,
       });
       continue;
@@ -609,8 +727,8 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
   structure: T,
   flags: Flag[],
   sourceLabel = 'your profile',
-): { structure: T; log: string[]; warnings: string[] } {
-  if (!flags.length) return { structure, log: [], warnings: [] };
+): { structure: T; log: string[]; warnings: string[]; cut: number; reverted: number } {
+  if (!flags.length) return { structure, log: [], warnings: [], cut: 0, reverted: 0 };
 
   const byText = new Map(flags.map((f) => [f.text, f]));
   const fixed: any = { ...structure };
@@ -641,6 +759,8 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
    * that went is named two warnings up.
    */
   const thinned: string[] = [];
+  /** Bullets a clause was cut from, as opposed to replaced wholesale. */
+  const trimmedAway: string[] = [];
 
   for (const kind of ['experience', 'projects', 'education'] as const) {
     if (!Array.isArray(fixed[kind])) continue;
@@ -651,6 +771,24 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
           .map((text: string) => {
             const flag = byText.get(text);
             if (!flag) return text;
+            /*
+             * The clause, where the clause is the fault.
+             *
+             * Reverting the whole sentence undoes the tailoring along with
+             * the problem, and most of what it undid was evidenced: across
+             * eight profiles the model rewrote 29% of bullets and 7%
+             * survived. Where the check could name the span, cutting the
+             * span keeps the rest — and `withoutSpan` declines whenever what
+             * is left does not read as a sentence, so the fallback is the
+             * person's own line exactly as before.
+             */
+            if (flag.cut) {
+              const trimmed = withoutSpan(text, flag.cut);
+              if (trimmed) {
+                trimmedAway.push(flag.text);
+                return trimmed;
+              }
+            }
             return flag.revertTo;
           })
           .filter((text: string) => text.trim());
@@ -664,9 +802,23 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
       .filter((entry: any) => (entry.bullets ?? []).length > 0);
   }
 
-  const reverted = flags.filter((f) => f.revertTo).length;
-  const removed = flags.length - reverted;
+  /*
+   * Counted apart, because they are not the same event.
+   *
+   * A clause cut keeps the rewrite and takes out the part nothing supports.
+   * A whole-bullet revert throws the rewrite away. Reporting them as one
+   * number is how "we reverted three bullets" came to describe both a resume
+   * that lost three tailored sentences and one that lost three adverbs.
+   */
+  const cut = new Set(trimmedAway);
+  const reverted = flags.filter((f) => f.revertTo && !cut.has(f.text)).length;
+  const removed = flags.filter((f) => !f.revertTo).length;
   const log: string[] = [];
+  if (cut.size) {
+    log.push(
+      `Trimmed ${cut.size} ${cut.size === 1 ? 'bullet' : 'bullets'} back to what your profile supports — the rest of the rewrite was kept.`,
+    );
+  }
   if (reverted) log.push(`Put ${reverted} ${reverted === 1 ? 'bullet' : 'bullets'} back in your own words — the rewrite had added something your profile does not say.`);
   if (removed) log.push(`Removed ${removed} ${removed === 1 ? 'bullet' : 'bullets'} that ${removed === 1 ? 'was' : 'were'} not based on anything in ${sourceLabel}.`);
   if (emptied.length) {
@@ -677,11 +829,20 @@ export function applyFlags<T extends { experience?: any[]; projects?: any[]; edu
 
   return {
     structure: fixed,
+    cut: cut.size,
+    reverted,
     log,
     warnings: [
       // One line per flag, so the person can see exactly what was claimed
       // rather than a count. This is the only place the claim is ever named.
-      ...flags.map((f) => `A rewritten bullet ${f.reason}, so ${f.revertTo ? 'your own wording was put back' : 'it was removed'}: "${f.text}"`),
+      ...flags.map((f) => {
+        const what = cut.has(f.text)
+          ? 'that part was trimmed out and the rest kept'
+          : f.revertTo
+            ? 'your own wording was put back'
+            : 'it was removed';
+        return `A rewritten bullet ${f.reason}, so ${what}: "${f.text}"`;
+      }),
       ...(thinned.length
         ? [
             // Two bullets is MIN_BULLETS in fit.ts, not something they wrote.

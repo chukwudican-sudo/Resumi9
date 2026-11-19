@@ -1,6 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { callClaude } from './anthropic';
-import { splitTerms } from './names';
 import type { ResumeStructure } from './types';
 import { STORED_ELSEWHERE, contentFor, hasContent, planSections } from './sections';
 
@@ -154,18 +153,29 @@ export function readableText(structure: ResumeStructure, contactName?: string): 
 export function ownNames(structure: ResumeStructure): string[] {
   const list = (value: unknown) => (Array.isArray(value) ? value : []);
   const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+  /*
+   * Names, not vocabulary.
+   *
+   * An employer, a school, a project, a certificate and an award are things
+   * only this person can spell — a model has no way to tell "Grüner Logistik"
+   * from a typo, and "correcting" one puts a wrong employer on a resume that
+   * goes to that employer.
+   *
+   * Skills and tech lines are deliberately NOT here, and that is a reversal.
+   * They look like the same category and they are not: "PostgresSQL",
+   * "Kubernets" and "Javascrpt" are exactly the typos a reader notices and a
+   * spellchecker can fix, and marking the whole skills section correct by
+   * fiat is how they survive to an employer. The prompt already tells the
+   * model to leave technical terms it recognises alone; that is a judgement
+   * about a word it knows, which is different from a blanket exemption for
+   * whatever somebody typed.
+   */
   const names = [
     ...list(structure.experience).map((e) => text((e as { org?: string }).org)),
-    ...list(structure.projects).flatMap((p) => [
-      text((p as { name?: string }).name),
-      // The tech line is a list of tool names, which is exactly the other
-      // category this is protecting.
-      ...splitTerms(text((p as { tech?: string }).tech)),
-    ]),
+    ...list(structure.projects).map((p) => text((p as { name?: string }).name)),
     ...list(structure.education).map((e) => text((e as { school?: string }).school)),
     ...list(structure.certifications).map((c) => text(c)),
     ...list(structure.awards).map((a) => text(a)),
-    ...list(structure.skills).flatMap((g) => splitTerms(text((g as { items?: string }).items))),
   ].filter(Boolean);
 
   const seen = new Set<string>();
@@ -192,7 +202,7 @@ export async function proofread(
     userId,
     kind: 'proofread',
     system: mine.length
-      ? `${PROOFREAD_PROMPT}\n\nThese are this person's own names for their employers, schools, projects and tools, exactly as they wrote them. Treat every one as correct and never return a correction for any of them:\n${mine.join(', ')}`
+      ? `${PROOFREAD_PROMPT}\n\nThese are this person's own names for their employers, schools, projects, certificates and awards, exactly as they wrote them. Treat every one as correct and never return a correction for any of them. This list is names only — it is not their skills, and a misspelled tool or language is still a misspelling worth catching:\n${mine.join(', ')}`
       : PROOFREAD_PROMPT,
     content: [{ type: 'text' as const, text: readableText(structure, contactName) }],
     tool: PROOFREAD_TOOL,

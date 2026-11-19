@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readInstruction } from './asked';
-import { applyFlags, checkBullets, toldByThePerson, wholeRecord } from './honesty';
+import { applyFlags, checkBullets, toldByThePerson, wholeRecord, withoutSpan } from './honesty';
 import type { ResolvedBullet } from './provenance';
 import type { ResumeStructure } from './types';
 
@@ -504,7 +504,7 @@ test('an entry this pass empties is taken off, not printed as a bare heading', (
 
 test('an entry that keeps one bullet keeps its heading', () => {
   const structure = { projects: [{ name: 'Resumi', bullets: ['a real one', 'invented'] }] };
-  const { structure: out } = applyFlags(structure as never, [
+  const { structure: out } = applyFlags(structure as unknown as ResumeStructure, [
     { text: 'invented', revertTo: '', reason: 'is not based on anything in your profile' },
   ]);
   assert.equal((out as any).projects.length, 1);
@@ -913,4 +913,136 @@ test('an empty record changes nothing', () => {
     POSTING,
   );
   assert.equal(flags.length, 1, 'the old behaviour, unchanged, when no record is passed');
+});
+
+// ── cutting the clause instead of the sentence ────────────────────────────
+
+test('an unsupported clause is cut and the rewrite survives', () => {
+  /*
+   * Measured across eight profiles and sixteen postings: the model rewrote
+   * 29% of printed bullets and 7% survived. The checks took back twenty-two
+   * points, a whole sentence at a time, and most of what went was evidenced.
+   */
+  const kept = withoutSpan(
+    'Built three rule-based detection algorithms in Java under tight latency constraints',
+    ' under tight latency constraints',
+  );
+  assert.equal(kept, 'Built three rule-based detection algorithms in Java');
+});
+
+test('a cut that leaves a fragment is declined', () => {
+  // The fallback has to be the person's own line, not wreckage.
+  assert.equal(withoutSpan('Built three algorithms and shipped them', 'three algorithms and shipped them'), null);
+  assert.equal(withoutSpan('Led the migration', 'the migration'), null);
+});
+
+test('a dangling joiner is trimmed rather than printed', () => {
+  const kept = withoutSpan(
+    'Cleaned 8,187 records across 41 paginated requests and validated every schema field',
+    ' and validated every schema field',
+  );
+  assert.equal(kept, 'Cleaned 8,187 records across 41 paginated requests');
+});
+
+test('an unbalanced bracket is a reason to decline', () => {
+  assert.equal(
+    withoutSpan('Shipped the parser (written in Rust) for the ingest path', 'written in Rust) for the ingest path'),
+    null,
+  );
+});
+
+test('a span that is not in the bullet declines', () => {
+  assert.equal(withoutSpan('Built the pipeline', 'nowhere in here'), null);
+});
+
+test('applyFlags cuts where it can and reverts where it cannot', () => {
+  const structure = {
+    experience: [
+      {
+        org: 'Acme',
+        bullets: [
+          'Built three rule-based detection algorithms in Java under tight latency constraints',
+          'Led the migration',
+        ],
+      },
+    ],
+    projects: [],
+  };
+  const { structure: out } = applyFlags(structure as unknown as ResumeStructure, [
+    {
+      text: 'Built three rule-based detection algorithms in Java under tight latency constraints',
+      revertTo: 'Built three rule-based detection algorithms',
+      reason: 'takes "tight latency constraints" from the posting',
+      cut: ' under tight latency constraints',
+    },
+    {
+      text: 'Led the migration',
+      revertTo: 'Helped with the migration',
+      reason: 'claims more ownership than the source gives',
+      cut: 'the migration',
+    },
+  ]);
+  assert.deepEqual(out.experience[0].bullets, [
+    // The clause went, the tailored wording stayed.
+    'Built three rule-based detection algorithms in Java',
+    // Cutting would have left "Led", so the person's own line came back.
+    'Helped with the migration',
+  ]);
+});
+
+test('a cut that would strand a verb from its object is refused', () => {
+  /*
+   * Printed on a real tailored resume before this guard: "Cached station
+   * reads to cut page load to one query instead of forty" lost "cut page
+   * load to" and became "Cached station reads to one query instead of
+   * forty". The verb the rest of the sentence hung on went with the span.
+   */
+  assert.equal(
+    withoutSpan('Cached station reads to cut page load to one query instead of forty', 'cut page load to'),
+    null,
+  );
+});
+
+test('a cut that leaves a hollow trailing clause is refused', () => {
+  // "…, strengthening skills" is grammatical and says nothing. The person's
+  // own sentence is better than a hollowed-out rewrite.
+  assert.equal(
+    withoutSpan(
+      'Edited a weekly section across two years of print and web, strengthening writing and editing skills',
+      'writing and editing ',
+    ),
+    null,
+  );
+});
+
+test('a span that merely starts with a preposition still cuts', () => {
+  // The dangling END is what breaks a join; "via REST API" and "in React"
+  // are clean removals and were both correct on real resumes.
+  assert.equal(
+    withoutSpan('Cached station reads via REST API so a page costs one query', ' via REST API'),
+    'Cached station reads so a page costs one query',
+  );
+  assert.equal(
+    withoutSpan('Built spaced-repetition flashcards in React with offline sync', ' in React'),
+    'Built spaced-repetition flashcards with offline sync',
+  );
+});
+
+test('a cut that strands the opening verb is refused', () => {
+  // "Coordinated audience messaging across two seasonal campaigns" lost
+  // "audience messaging" and printed "Coordinated across two seasonal
+  // campaigns" on a real resume.
+  assert.equal(
+    withoutSpan('Coordinated audience messaging across two seasonal campaigns', 'audience messaging'),
+    null,
+  );
+});
+
+test('a span deeper in the sentence still cuts', () => {
+  // The guard above is narrow: only the word directly after the verb, and
+  // only when a preposition closes the gap.
+  assert.equal(
+    withoutSpan('Wrote the database migration that moved 2.1M rows', 'database '),
+    'Wrote the migration that moved 2.1M rows',
+  );
 });

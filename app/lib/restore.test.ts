@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { couldComeBack, readRestore, restoreLine, withRestored } from './restore';
-import type { DroppedEntry } from './fit';
+import { droppedKey, type DroppedEntry } from './fit';
 
 const job = (name: string, index: number): DroppedEntry => ({
   section: 'experience',
@@ -373,4 +373,75 @@ test('an entry already on the page is not restored a second time', () => {
   // The copy on the page wins: it has been through the tailoring, the honesty
   // check and the guard, where the other is a splice of an older version.
   assert.deepEqual((out.projects[1] as { bullets: string[] }).bullets, ['the tailored copy']);
+});
+
+// ── what tells one dropped entry from another ─────────────────────────────
+
+test('the same entry recorded twice is offered once', () => {
+  /*
+   * Eleven real rows carry the same entry twice, from a fitter that offered
+   * one index to two passes. The restore survived it, but the list is also
+   * what the model is shown as available, and "Not on this resume, and
+   * available: Rate Limit Lab, Rate Limit Lab" is the app telling somebody it
+   * has two of their project.
+   */
+  const twice = [project('Rate Limit Lab', 5), project('Rate Limit Lab', 5), job('Droady', 0)];
+  const offered = couldComeBack(twice, null, { experience: [], projects: [] } as never);
+  assert.deepEqual(offered.map((d) => d.name), ['Rate Limit Lab', 'Droady']);
+});
+
+test('two different entries at one index are kept apart', () => {
+  /*
+   * The dropped list is carried forward from version to version and added
+   * to, so an index refers to the section as it stood when that entry was
+   * cut. Three real rows hold projects:2 twice, naming two different
+   * projects. Keyed by position, restoring either would clear both records
+   * and leave the other unrestorable with nothing saying why.
+   */
+  const collided = [project('Kudi Kitchen', 2), project('FraudWatch', 2)];
+  const offered = couldComeBack(collided, null, { experience: [], projects: [] } as never);
+  assert.deepEqual(offered.map((d) => d.name), ['Kudi Kitchen', 'FraudWatch']);
+  assert.notEqual(droppedKey(collided[0]), droppedKey(collided[1]), 'they are not the same entry');
+});
+
+test('one name in two sections is two entries', () => {
+  // Somebody can have a venture as a job and as a project. Both are real and
+  // both belong on the list.
+  const both = [job('Kudi Kitchen', 0), project('Kudi Kitchen', 1)];
+  assert.notEqual(droppedKey(both[0]), droppedKey(both[1]));
+  assert.equal(couldComeBack(both, null, { experience: [], projects: [] } as never).length, 2);
+});
+
+test('identity ignores how a name was punctuated', () => {
+  const a = { section: 'experience' as const, index: 0, name: 'WesternBell International Ltd.', entry: { dates: '2024' } };
+  const b = { section: 'experience' as const, index: 3, name: 'westernbell international ltd', entry: { dates: '2024' } };
+  assert.equal(droppedKey(a), droppedKey(b), 'one employer, written two ways');
+});
+
+test('a record the person has since renamed is not offered under the old name', () => {
+  /*
+   * droppedKey is name-and-dates because a ResumeStructure carries no stable
+   * entry id — profile_entries has one and it never reaches the structure.
+   * So editing an entry orphans its record, and the person would be shown
+   * their project twice: once from the profile under its new name, once from
+   * bookkeeping under the old.
+   */
+  const stale = [project('Rate Limit Lab', 4)];
+  const renamed = { experience: [], projects: [{ name: 'Ratelimiter', tech: 'Python', dates: '2025', bullets: ['x'] }] } as never;
+  const offered = couldComeBack(stale, renamed, { experience: [], projects: [] } as never);
+  assert.deepEqual(offered.map((d) => d.name), ['Ratelimiter'], 'the profile wins, and the orphan goes');
+});
+
+test('a record for something deleted from the profile is not offered', () => {
+  // Removing an entry is a decision too. Bringing it back out of bookkeeping
+  // after somebody deleted it is worse than forgetting it.
+  const gone = [project('Abandoned', 3)];
+  const profile = { experience: [], projects: [] } as never;
+  assert.deepEqual(couldComeBack(gone, profile, profile).map((d) => d.name), []);
+});
+
+test('with no profile to compare against, the dropped list is trusted', () => {
+  // It is the only thing that knows.
+  const kept = [project('Rate Limit Lab', 4), job('Droady', 1)];
+  assert.equal(couldComeBack(kept, null, { experience: [], projects: [] } as never).length, 2);
 });

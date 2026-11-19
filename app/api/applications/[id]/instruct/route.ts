@@ -9,7 +9,7 @@ import { tidyQuestion } from '../../../../lib/question';
 import { gapsAfterEdit, rescore } from '../../../../lib/requirementMatch';
 import { moveLine, readMove } from '../../../../lib/sectionMove';
 import { couldComeBack, readRestore, restoreLine, withRestored, type Restore } from '../../../../lib/restore';
-import { MAX_SKILL_LINES, cappedSkills, fitToPages, type DroppedEntry } from '../../../../lib/fit';
+import { MAX_SKILL_LINES, cappedSkills, droppedKey, fitToPages, type DroppedEntry } from '../../../../lib/fit';
 import { planSections, withSectionMoved } from '../../../../lib/sections';
 import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
@@ -262,7 +262,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * be invented on the way and the honesty check has nothing to flag.
    */
   async function restoreOnly(restore: Restore, lines: string[]) {
-    const back = new Set(restore.entries.map((e) => `${e.section}:${e.index}`));
+    // By identity, not position: the dropped list spans versions, so an index
+    // in it refers to a section that has since changed. See fit.ts/droppedKey.
+    const back = new Set(restore.entries.map(droppedKey));
     /*
      * Asking for something back is the clearest possible way of saying keep
      * it. Without this the next tailor takes it off again — the same job, for
@@ -316,7 +318,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
        * recording that it went — which is the bookkeeping that made "add it
        * back" work in the first place.
        */
-      dropped: [...kept.filter((d) => !back.has(`${d.section}:${d.index}`)), ...fitted.dropped],
+      dropped: [...kept.filter((d) => !back.has(droppedKey(d))), ...fitted.dropped],
       pins,
       mode: 'instructed',
     });
@@ -663,7 +665,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // it was, and an entry spliced in beforehand would read to it as one the
     // model invented.
     const restored = restore ? withRestored(moved, restore.entries) : moved;
-    const putBack = new Set((restore?.entries ?? []).map((e) => `${e.section}:${e.index}`));
+    const putBack = new Set((restore?.entries ?? []).map(droppedKey));
 
     /*
      * Held to what the sentence named, last of all.
@@ -896,7 +898,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // at the version it was made on would be gone by the next question.
       // Plus whatever making room has just taken off, or an entry would go
       // with nothing recording that it went.
-      dropped: [...kept.filter((d) => !putBack.has(`${d.section}:${d.index}`)), ...(refit?.dropped ?? [])],
+      dropped: [...kept.filter((d) => !putBack.has(droppedKey(d))), ...(refit?.dropped ?? [])],
       /*
        * What the sentence said to keep, and anything it asked back.
        *
