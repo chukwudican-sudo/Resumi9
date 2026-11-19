@@ -13,6 +13,13 @@
  * always rolls back, so the rows exist only for the length of the check and
  * `failures` is as it was afterwards — which the last line verifies rather
  * than assumes.
+ *
+ * Every query inside that transaction is handed the transaction, which is
+ * what keeps the rollback honest: a call that used the pool instead would
+ * open its OWN transaction on the same connection, and its commit would end
+ * this one. That is not a hypothetical — it is what went wrong in
+ * scripts/feedback.selftest.ts, where a `--dry` run committed the migration
+ * it was meant to be proving.
  */
 import postgres from 'postgres';
 import fs from 'node:fs';
@@ -124,7 +131,8 @@ async function main() {
     return lines;
   };
 
-  await run(sql, 'EMPTY — the real table, as it stands');
+  const [{ n: held }] = await sql`select count(*)::int as n from failures`;
+  await run(sql, `THE REAL TABLE, AS IT STANDS (${held} row${held === 1 ? '' : 's'})`);
 
   /*
    * The populated half. Seven rows covering every branch the report has: a
@@ -154,9 +162,19 @@ async function main() {
   console.log('\n── what the populated run printed\n');
   for (const line of printed) console.log(line.replace(/^/gm, '  '));
 
+  /*
+   * Compared against what was there before, not against zero.
+   *
+   * This used to assert the table was EMPTY afterwards, which was true on the
+   * day it was written and stopped being true the moment the logger started
+   * recording real attempts — at which point a healthy database would have
+   * been reported as a failed rollback. A test whose correctness depends on
+   * production being empty is a test with a shelf life.
+   */
   const [{ n }] = await sql`select count(*)::int as n from failures`;
-  console.log(`\nrows left in failures: ${n} ${n === 0 ? '(rolled back cleanly)' : '*** THE ROLLBACK DID NOT TAKE ***'}`);
-  if (n !== 0) failures += 1;
+  const clean = n === held;
+  console.log(`\nrows in failures: ${held} before, ${n} after ${clean ? '(rolled back cleanly)' : '*** THE ROLLBACK DID NOT TAKE ***'}`);
+  if (!clean) failures += 1;
 
   await sql.end();
   console.log(failures ? `\n${failures} check(s) FAILED\n` : '\nevery query and the report ran clean\n');
