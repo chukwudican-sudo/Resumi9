@@ -731,3 +731,14 @@ export async function setFeedbackSeen(feedbackId: string, seen: boolean) {
   await markFeedbackSeen(feedbackId, seen);
   revalidatePath('/admin/feedback');
 }
+
+/** The same, for everything still unread. Same gate, for the same reason. */
+export async function markEverythingSeen() {
+  const userId = await requireUserId();
+  const { isAdmin } = await import('./feedback');
+  if (!(await isAdmin(userId))) throw new Error('Not found.');
+  const { markAllFeedbackSeen } = await import('./db/repository');
+  const marked = await markAllFeedbackSeen();
+  revalidatePath('/admin/feedback');
+  return marked;
+}

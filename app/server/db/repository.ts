@@ -2546,6 +2546,16 @@ export async function storedShotBytes(on: Executor = db): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
+/** Everything unread, read, in one statement rather than one round trip each. */
+export async function markAllFeedbackSeen(on: Executor = db): Promise<number> {
+  const marked = await on
+    .update(feedback)
+    .set({ seenAt: new Date() })
+    .where(isNull(feedback.seenAt))
+    .returning({ id: feedback.id });
+  return marked.length;
+}
+
 /** Read, or back to the inbox. The only state a piece of feedback has. */
 export async function markFeedbackSeen(feedbackId: string, seen: boolean, on: Executor = db): Promise<void> {
   await on
