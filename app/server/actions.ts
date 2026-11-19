@@ -711,3 +711,23 @@ export async function restoreResumeVersion(applicationId: string, resumeId: stri
   if (!restored) throw new Error('That version could not be found.');
   revalidatePath(`/applications/${applicationId}`);
 }
+
+// ── Feedback ───────────────────────────────────────────────────────────────
+
+/**
+ * Marks a piece of feedback read, or puts it back.
+ *
+ * The only write the inbox has, and the only action in this file whose check
+ * is not "is this row yours" — by definition it is somebody else's. So it
+ * asks the same question the page asked before rendering: the gate is
+ * repeated here rather than assumed, because a server action is an endpoint
+ * and can be called without the page it came from.
+ */
+export async function setFeedbackSeen(feedbackId: string, seen: boolean) {
+  const userId = await requireUserId();
+  const { isAdmin } = await import('./feedback');
+  if (!(await isAdmin(userId))) throw new Error('Not found.');
+  const { markFeedbackSeen } = await import('./db/repository');
+  await markFeedbackSeen(feedbackId, seen);
+  revalidatePath('/admin/feedback');
+}

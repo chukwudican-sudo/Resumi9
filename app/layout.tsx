@@ -2,9 +2,10 @@ import './globals.css';
 import type { Metadata } from 'next';
 import { IBM_Plex_Sans, Instrument_Serif } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
-import { syncCurrentUser } from './server/auth';
+import { currentUserId, syncCurrentUser } from './server/auth';
 import UndoProvider from './components/undo/UndoProvider';
 import ConfirmProvider from './components/undo/ConfirmProvider';
+import FeedbackButton from './components/FeedbackButton';
 
 /**
  * The two faces the design uses. Loaded through next/font so they are
@@ -50,6 +51,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     console.error('[Resumi9] Could not sync the signed-in user; rendering anyway.', error);
   }
 
+  /*
+   * Whether to ask for an email in the feedback panel, and nothing else. A
+   * signed-in account already has one; a stranger on the landing page does
+   * not, and is exactly the person worth hearing from.
+   */
+  let signedIn = false;
+  try {
+    signedIn = Boolean(await currentUserId());
+  } catch (error) {
+    if ((error as { digest?: string })?.digest === 'DYNAMIC_SERVER_USAGE') throw error;
+  }
+
   return (
     <ClerkProvider>
       <html lang="en" className={`${sans.variable} ${serif.variable}`}>
@@ -64,6 +77,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <UndoProvider>
             <ConfirmProvider>{children}</ConfirmProvider>
           </UndoProvider>
+          {/*
+            Here rather than in AppNav, so it is also on the landing page, the
+            sign-in pages and the 404 — every screen somebody can be standing
+            on when something goes wrong.
+          */}
+          <FeedbackButton signedIn={signedIn} />
         </body>
       </html>
     </ClerkProvider>

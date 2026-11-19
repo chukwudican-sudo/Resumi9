@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -560,4 +562,110 @@ export const usageEvents = pgTable('usage_events', {
   userIdx: index('usage_events_user_idx').on(t.userId, t.createdAt),
   /** For the global daily ceiling, which sums across all users. */
   dayIdx: index('usage_events_day_idx').on(t.createdAt),
+}));
+
+// ── Feedback ───────────────────────────────────────────────────────────────
+
+/**
+ * Raw bytes. Drizzle has no built-in `bytea`, and this is the whole of it.
+ *
+ * postgres.js hands a `bytea` back as a Buffer and takes one going in, so
+ * there is no encoding step in either direction and what comes out is byte for
+ * byte what went in — which the self-test checks rather than assumes.
+ */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
+
+/**
+ * What somebody told us, and where they were standing when they said it.
+ *
+ * Reachable from every page, signed in or not — a stranger who bounced off the
+ * landing page is exactly the person whose reason nobody ever learns, and a
+ * form that needs an account cannot hear from them.
+ *
+ * **`user_id` is nullable, and that is the point.** Everything else in this
+ * schema is owned by somebody; this is the one table whose rows may belong to
+ * nobody. The cascade below means a row that DOES belong to somebody leaves
+ * with their account, screenshots and all.
+ *
+ * **Nothing is auto-captured from their resume.** The page URL, the window
+ * size, the browser string and the build — none of which is their work. The
+ * message is theirs to write, and the one thing deliberately left uncaptured
+ * is the console log, which in this app can quote a bullet.
+ */
+export const feedback = pgTable('feedback', {
+  /**
+   * Shown to the person as the reference for what they just sent, and printed
+   * on the row in the inbox, so a message and a conversation about it can be
+   * tied together without either side describing it.
+   */
+  id: id(),
+  /** Null for a signed-out visitor. */
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  /**
+   * Read off the page URL and then checked against their own applications, so
+   * a made-up id is stored as null rather than as a pointer to someone else's.
+   *
+   * `set null` rather than cascade: a report about an application somebody has
+   * since deleted is still a report worth reading.
+   */
+  applicationId: text('application_id').references(() => applications.id, { onDelete: 'set null' }),
+  /** bug | idea | confusing | other */
+  kind: text('kind').notNull(),
+  message: text('message').notNull(),
+  /** Optional, and only asked of someone signed out. Null otherwise. */
+  email: text('email'),
+  pageUrl: text('page_url'),
+  userAgent: text('user_agent'),
+  /** "1512x982 @2x" — enough to reproduce a layout bug, nothing more. */
+  viewport: text('viewport'),
+  /** The deploy, so a report can be tied to the code that was running. */
+  appVersion: text('app_version'),
+  /**
+   * The most recent attempt row for this person, if one is recent enough to
+   * plausibly be what they are writing about.
+   *
+   * The join that makes a one-line "it didn't work" answerable: the failures
+   * table already knows which stage broke and whether the credit went back.
+   */
+  attemptId: bigint('attempt_id', { mode: 'number' }).references(() => failures.id, { onDelete: 'set null' }),
+  /**
+   * Who sent it, for rate limiting only: a signed-in id, or an HMAC of the
+   * address. Never the address itself — a table of IPs is a different kind of
+   * record than a table of bug reports.
+   */
+  sender: text('sender'),
+  /** When it was read. Null is the inbox. */
+  seenAt: timestamp('seen_at', { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => ({
+  /** The admin list: newest first, unread first. */
+  recentIdx: index('feedback_recent_idx').on(t.createdAt),
+  /** The rate-limit count, which is the only query on the hot path. */
+  senderIdx: index('feedback_sender_idx').on(t.sender, t.createdAt),
+}));
+
+/**
+ * The screenshots, in their own table so the inbox query stays small.
+ *
+ * In the database rather than in a bucket. Two reasons, both about tonight:
+ * the app holds no storage credentials and talks to Postgres and nothing else,
+ * so a bucket is a credential and a deploy variable before it is a feature;
+ * and an image in a row leaves with the account by the same cascade as
+ * everything else, where a bucket would need its own deletion path that has to
+ * be remembered in `deleteUserData` forever. Images are shrunk in the browser
+ * before they are sent, so a row is a few hundred kilobytes.
+ */
+export const feedbackShots = pgTable('feedback_shots', {
+  id: id(),
+  feedbackId: text('feedback_id').notNull().references(() => feedback.id, { onDelete: 'cascade' }),
+  /** image/png or image/jpeg, checked against the bytes' own header. */
+  contentType: text('content_type').notNull(),
+  bytes: bytea('bytes').notNull(),
+  /** Stored so the inbox can show a size without reading the image. */
+  byteSize: integer('byte_size').notNull(),
+  createdAt: createdAt(),
+}, (t) => ({
+  ofIdx: index('feedback_shots_of_idx').on(t.feedbackId),
 }));

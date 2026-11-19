@@ -15,6 +15,14 @@ const isPublic = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/api/webhooks(.*)',     // Clerk calls this without a session, by design
+  /*
+   * Exactly this path, not `/api/feedback(.*)`. The POST has to be reachable
+   * by a signed-out visitor — they are the one person whose reason for
+   * leaving nobody ever learns. `/api/feedback/shot/<id>` serves somebody
+   * else's screenshot and stays behind the sign-in, with an admin check of
+   * its own on top.
+   */
+  '/api/feedback',
 ]);
 
 /**
@@ -28,6 +36,13 @@ const isPublic = createRouteMatcher([
  * Listed rather than derived because middleware cannot see the route table.
  * A new route added without a line here is answered as missing rather than
  * exposed, which is the safe direction to fail in.
+ *
+ * `/admin` is left out ON PURPOSE, and it is the one path where that is a
+ * decision rather than an omission. Listed, a signed-out stranger who guessed
+ * it would be sent to sign-in — which tells them there is something there.
+ * Unlisted, they fall through to the page, which answers 404 to everybody who
+ * is not on the allowlist. One answer for strangers, non-admins and typos
+ * alike.
  */
 const isKnown = createRouteMatcher([
   '/',

@@ -12,6 +12,8 @@ import {
   documents,
   facts,
   failures,
+  feedback,
+  feedbackShots,
   interviewSessions,
   interviewTurns,
   jobPostings,
@@ -2252,4 +2254,269 @@ export async function getUsageWindow(userId: string): Promise<{
     userCallsLastMinute: Number(row?.user_calls_1m ?? 0),
     userSpentLast24hUsd: Number(row?.user_spent_24h ?? 0),
   };
+}
+
+// ── Feedback ───────────────────────────────────────────────────────────────
+
+/**
+ * The one group of functions in this file that does not take a `userId` first.
+ *
+ * Deliberate, and the two reasons are different. A piece of feedback may have
+ * no owner at all — a signed-out visitor is the person whose reason for
+ * leaving nobody ever learns, and a form that needs an account cannot hear
+ * from them. And the inbox reads ACROSS users by definition, which is why the
+ * two functions that do so are named for it: `…AcrossUsers` is a word to catch
+ * the eye of anybody adding a call to them from feature code, where nothing
+ * should ever be reading another person's row.
+ *
+ * Both are reachable only from the feedback route and the admin page, and the
+ * admin page checks who is asking before it reads anything.
+ */
+
+/**
+ * The pool, or a transaction inside it.
+ *
+ * Every feedback function takes one, defaulting to the pool, so the self-test
+ * can run the REAL functions inside a transaction it rolls back. Without it
+ * the test had to open a transaction with a raw `begin` on the shared
+ * connection — and `saveFeedback`'s own `db.transaction()` then issued a
+ * second `begin` that Postgres ignored and a `commit` that ended the outer
+ * one. The dry run committed the migration it was meant to be proving.
+ *
+ * Handed a transaction, drizzle turns a nested `transaction()` into a
+ * SAVEPOINT, whose release cannot end anything but itself. That is the fix:
+ * not care taken at the call site, but a shape in which the mistake is not
+ * expressible.
+ */
+export type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export interface NewFeedback {
+  /** Null for a signed-out visitor. */
+  userId: string | null;
+  applicationId: string | null;
+  kind: string;
+  message: string;
+  email: string | null;
+  pageUrl: string | null;
+  userAgent: string | null;
+  viewport: string | null;
+  appVersion: string | null;
+  attemptId: number | null;
+  sender: string | null;
+  shots: { contentType: string; bytes: Buffer }[];
+}
+
+/**
+ * Stores one piece of feedback and its screenshots, together or not at all.
+ *
+ * In a transaction because a report whose images are missing looks to the
+ * reader like the person sent none, which is worse than an error the person
+ * can act on — they still have their text, and the panel keeps it.
+ */
+export async function saveFeedback(input: NewFeedback, on: Executor = db): Promise<{ id: string }> {
+  const id = newId('fb');
+  await on.transaction(async (tx) => {
+    await tx.insert(feedback).values({
+      id,
+      userId: input.userId,
+      applicationId: input.applicationId,
+      kind: input.kind,
+      message: input.message,
+      email: input.email,
+      pageUrl: input.pageUrl,
+      userAgent: input.userAgent,
+      viewport: input.viewport,
+      appVersion: input.appVersion,
+      attemptId: input.attemptId,
+      sender: input.sender,
+    });
+    if (input.shots.length) {
+      await tx.insert(feedbackShots).values(
+        input.shots.map((shot) => ({
+          id: newId('fbs'),
+          feedbackId: id,
+          contentType: shot.contentType,
+          bytes: shot.bytes,
+          byteSize: shot.bytes.byteLength,
+        })),
+      );
+    }
+  });
+  return { id };
+}
+
+/** How many this sender has sent lately. The rate limit's only query. */
+export async function countFeedbackFrom(sender: string, withinMinutes: number, on: Executor = db): Promise<number> {
+  const [row] = await on.execute(sql`
+    select count(*)::int as n from feedback
+    where sender = ${sender} and created_at >= now() - make_interval(mins => ${withinMinutes})
+  `) as unknown as [{ n: number }];
+  return Number(row?.n ?? 0);
+}
+
+/** And how many have arrived from anybody, which bounds a determined sender. */
+export async function countFeedbackAcrossUsers(withinMinutes: number, on: Executor = db): Promise<number> {
+  const [row] = await on.execute(sql`
+    select count(*)::int as n from feedback
+    where created_at >= now() - make_interval(mins => ${withinMinutes})
+  `) as unknown as [{ n: number }];
+  return Number(row?.n ?? 0);
+}
+
+/** Whether this application is theirs, before its id is stored beside a report. */
+export async function hasApplication(userId: string, applicationId: string, on: Executor = db): Promise<boolean> {
+  const [row] = await on
+    .select({ id: applications.id })
+    .from(applications)
+    .where(and(eq(applications.userId, userId), eq(applications.id, applicationId)))
+    .limit(1);
+  return Boolean(row);
+}
+
+/**
+ * The attempt they are most likely writing about.
+ *
+ * Preferring one on the same application, then the most recent of any — and
+ * only within the window, because an attempt from last week is not what
+ * somebody typing "this didn't work" means. Reading it on the server rather
+ * than taking it from the browser: the browser does not know the id, and a
+ * number sent by a client would be a pointer into another person's rows.
+ */
+export async function latestAttemptFor(
+  userId: string,
+  applicationId: string | null,
+  withinMinutes: number,
+  on: Executor = db,
+): Promise<number | null> {
+  const [row] = await on.execute(sql`
+    select id from failures
+    where user_id = ${userId}
+      and created_at >= now() - make_interval(mins => ${withinMinutes})
+    order by (application_id is not distinct from ${applicationId}) desc, created_at desc
+    limit 1
+  `) as unknown as [{ id: number } | undefined];
+  return row ? Number(row.id) : null;
+}
+
+export interface FeedbackRow {
+  id: string;
+  userId: string | null;
+  email: string | null;
+  accountEmail: string | null;
+  applicationId: string | null;
+  kind: string;
+  message: string;
+  pageUrl: string | null;
+  userAgent: string | null;
+  viewport: string | null;
+  appVersion: string | null;
+  attemptId: number | null;
+  seenAt: Date | null;
+  createdAt: Date;
+  /** The attempt beside it, where there is one. Why the join exists. */
+  attempt: { stage: string; fault: string | null; reason: string | null; refunded: boolean; ok: boolean | null } | null;
+  shots: { id: string; contentType: string; byteSize: number }[];
+}
+
+/**
+ * The inbox: newest first, with the failure beside each row where there is one.
+ *
+ * Reads across users, which is the point and the reason for the name. The
+ * bytes are left behind — an inbox that fetches every screenshot to render a
+ * list is a page nobody can open on a phone.
+ */
+export async function listFeedbackAcrossUsers(limit = 200, on: Executor = db): Promise<FeedbackRow[]> {
+  const rows = await on.execute(sql`
+    select f.id, f.user_id, f.email, u.email as account_email, f.application_id,
+           f.kind, f.message, f.page_url, f.user_agent, f.viewport, f.app_version,
+           f.attempt_id, f.seen_at, f.created_at,
+           a.stage, a.fault, a.reason, a.refunded, a.ok
+    from feedback f
+    left join users u on u.id = f.user_id
+    left join failures a on a.id = f.attempt_id
+    -- The id breaks the tie. Two reports with the same timestamp have no
+    -- order at all under created_at alone, so the list could come back
+    -- shuffled between one page load and the next, which in a list somebody
+    -- reads top to bottom looks like rows appearing and disappearing.
+    order by f.created_at desc, f.id desc
+    limit ${limit}
+  `) as unknown as Record<string, unknown>[];
+
+  if (!rows.length) return [];
+
+  const shots = await on
+    .select({
+      id: feedbackShots.id,
+      feedbackId: feedbackShots.feedbackId,
+      contentType: feedbackShots.contentType,
+      byteSize: feedbackShots.byteSize,
+    })
+    .from(feedbackShots)
+    .where(inArray(feedbackShots.feedbackId, rows.map((r) => String(r.id))));
+
+  return rows.map((r) => ({
+    id: String(r.id),
+    userId: (r.user_id as string | null) ?? null,
+    email: (r.email as string | null) ?? null,
+    accountEmail: (r.account_email as string | null) ?? null,
+    applicationId: (r.application_id as string | null) ?? null,
+    kind: String(r.kind),
+    message: String(r.message),
+    pageUrl: (r.page_url as string | null) ?? null,
+    userAgent: (r.user_agent as string | null) ?? null,
+    viewport: (r.viewport as string | null) ?? null,
+    appVersion: (r.app_version as string | null) ?? null,
+    attemptId: r.attempt_id == null ? null : Number(r.attempt_id),
+    seenAt: (r.seen_at as Date | null) ?? null,
+    createdAt: r.created_at as Date,
+    attempt: r.stage
+      ? {
+          stage: String(r.stage),
+          fault: (r.fault as string | null) ?? null,
+          reason: (r.reason as string | null) ?? null,
+          refunded: Boolean(r.refunded),
+          ok: (r.ok as boolean | null) ?? null,
+        }
+      : null,
+    shots: shots
+      .filter((s) => s.feedbackId === String(r.id))
+      .map((s) => ({ id: s.id, contentType: s.contentType, byteSize: s.byteSize })),
+  }));
+}
+
+/** One screenshot's bytes. Served only through the admin-gated route. */
+export async function getFeedbackShotAcrossUsers(
+  shotId: string,
+  on: Executor = db,
+): Promise<{ contentType: string; bytes: Buffer } | null> {
+  const [row] = await on
+    .select({ contentType: feedbackShots.contentType, bytes: feedbackShots.bytes })
+    .from(feedbackShots)
+    .where(eq(feedbackShots.id, shotId))
+    .limit(1);
+  if (!row) return null;
+  return { contentType: row.contentType, bytes: Buffer.from(row.bytes) };
+}
+
+/**
+ * How much screenshot the table is holding, in bytes.
+ *
+ * The one number that stands between an open upload form and a full database.
+ * Summed rather than estimated: `byte_size` is stored alongside the bytes
+ * precisely so this costs an index-free scan of a small column rather than
+ * reading every image to add up their lengths.
+ */
+export async function storedShotBytes(on: Executor = db): Promise<number> {
+  const [row] = (await on.execute(sql`
+    select coalesce(sum(byte_size), 0)::bigint as n from feedback_shots
+  `)) as unknown as [{ n: string | number }];
+  return Number(row?.n ?? 0);
+}
+
+/** Read, or back to the inbox. The only state a piece of feedback has. */
+export async function markFeedbackSeen(feedbackId: string, seen: boolean, on: Executor = db): Promise<void> {
+  await on
+    .update(feedback)
+    .set({ seenAt: seen ? new Date() : null })
+    .where(eq(feedback.id, feedbackId));
 }

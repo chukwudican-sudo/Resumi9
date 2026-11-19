@@ -120,3 +120,22 @@ key in `couldComeBack` handle both shapes — so this is cosmetic: a single
 `UPDATE` deduping `resumes.dropped`. The saved change-log text on those
 versions still reads "Dropped 4 projects … Kudi Kitchen, Kudi Kitchen …" and
 should be left alone; it is the record of what the app said at the time.
+
+## Feedback, after the MVP
+
+- **Screenshots live in `feedback_shots` as `bytea`, not in a bucket.** The
+  right long-term home is a private Storage bucket; this is in Postgres
+  because the app holds no storage credentials, and because an image in a row
+  leaves with the account through the cascade that already exists. The swap
+  is one module — `saveFeedback` and `getFeedbackShotAcrossUsers` are the
+  only two functions that touch the bytes — and should happen before the
+  table is carrying more than a few hundred megabytes, or before a report can
+  attach something larger than a screenshot. A deletion path for a signed-out
+  person's images has to be written at the same time; today the cascade
+  cannot reach them because there is no account to delete.
+- **Nothing ages out.** A signed-out report belongs to nobody, so no account
+  deletion removes it. Worth a retention rule once there is a reason to keep
+  one: say, screenshots dropped after ninety days, the text kept.
+- **No reply path.** An optional email is collected from signed-out senders
+  and never used. Either answer them or stop asking.
+- Statuses beyond new/seen, voting and threads were deliberately out of scope.
