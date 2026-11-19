@@ -24,6 +24,7 @@ import { fitToPages } from '../../../../lib/fit';
 import { pinsFromRules, type Pin } from '../../../../lib/pins';
 import { CLAIM_CHECK_ESTIMATE_MS, COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
 import { pageLimit, type RuleCheck } from '../../../../lib/rules';
+import { faultOf, sanitise, type Stage } from '../../../../lib/failures';
 import {
   getActiveRules,
   getUser,
@@ -31,6 +32,8 @@ import {
   getLatestResume,
   getProfile,
   getSupportingFacts,
+  beginAttempt,
+  endAttempt,
   refundCredit,
   saveResume,
   spendCredit,
@@ -97,10 +100,36 @@ export async function POST(_request: Request, { params }: { params: { id: string
     return errorResponse({ type: 'generic', message: 'Build your profile first.' }, 400);
   }
 
+  /*
+   * The attempt row opens before anything can go wrong, including the spend.
+   *
+   * A request the platform kills runs no catch block and would otherwise
+   * leave nothing at all — which is the failure worth seeing, because it is
+   * the one nobody can find afterwards. A row whose `finishedAt` is still
+   * null long after it opened is exactly that.
+   *
+   * `at` is what a catch block cannot work out for itself: fitToPages and
+   * saveResume throw into the same handler, so the stage is tracked as the
+   * route moves rather than guessed at the end.
+   */
+  const attempt = await beginAttempt(userId, { kind: 'tailor', applicationId: params.id, stage: 'limits' });
+  let at: Stage = 'limits';
+  /** Closes the row and reports, so no exit can log one without the other. */
+  const failed = async (stage: Stage, error: unknown, refunded: boolean) => {
+    await endAttempt(attempt, {
+      ok: false,
+      stage,
+      fault: faultOf(error, stage),
+      reason: sanitise(error),
+      refunded,
+    });
+  };
+
   // Spend before generating. The other order lets two tabs both produce a
   // resume on the last remaining credit.
   const remaining = await spendCredit(userId);
   if (remaining === null) {
+    await failed('limits', new Error('No credits left for today'), false);
     return errorResponse(
       {
         type: 'generic',
@@ -183,6 +212,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       },
     ];
 
+    at = 'model';
     const { toolInput } = await callClaude<TailorResult>({
       userId,
       kind: 'tailor',
@@ -221,6 +251,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
      * actually be saved: a bullet reverted here must still be counted when it
      * decides whether anything was dropped.
      */
+    at = 'unreadable';
     const resolved = resolveTailored(toolInput.structure, index);
 
     /*
@@ -233,6 +264,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
      */
     if (unreadable(resolved.bullets)) {
       await refundCredit(userId);
+      await failed('unreadable', new Error('No changed bullet resolved to a source'), true);
       console.error('[Resumi9] Tailoring came back in a shape we could not read; refunded.');
       return errorResponse(
         {
@@ -297,11 +329,13 @@ export async function POST(_request: Request, { params }: { params: { id: string
       }
     }
 
+    at = 'honesty_emptied';
     const honest = applyFlags(resolved.structure, checked);
     if (checked.length) {
       console.error(`[Resumi9] Tailoring made ${checked.length} claim(s) the profile does not support; put back.`);
     }
 
+    at = 'guard_unusable';
     const guarded = validateTailored(structure, honest.structure, {
       // Their answered facts are part of their record, so a skill one of them
       // names is theirs to list. Figma was in the facts and in no skills line.
@@ -323,6 +357,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
      */
     if (guarded.unusable) {
       await refundCredit(userId);
+      await failed('guard_unusable', new Error('No entry matched the profile'), true);
       console.error('[Resumi9] Tailoring returned nothing that matched the profile; refunded.');
       return errorResponse(
         {
@@ -359,6 +394,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
      * still does not reach the target then none of it is spent.
      */
     const limit = pageLimit(rules.map((r) => ({ id: r.id, text: r.text, check: (r.check as RuleCheck) ?? null })));
+    at = 'fit';
     const fitted = await fitToPages(guarded.structure, {
       target: limit.target,
       // So an over-long warning says "your rules ask for" only when they did.
@@ -408,6 +444,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       },
     });
 
+    at = 'save';
     const resumeId = await saveResume(userId, params.id, {
       structure: fitted.structure,
       matchScore: toolInput.matchScore ?? null,
@@ -485,6 +522,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     // Said out loud rather than done quietly: polishing regroups skills and
     // can reorder sections, and finding that out from a resume you already
     // sent is worse than being told now.
+    await endAttempt(attempt, { ok: true, stage: 'done' });
     return NextResponse.json({
       resumeId,
       creditsLeft: remaining,
@@ -496,6 +534,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
     // the success return — so reaching this catch means there is no tailored
     // resume anywhere. Charging for that is charging for an outage.
     await refundCredit(userId);
+    // Paired with the refund deliberately: a test fails the build if any
+    // path does one without the other. `at` says which stage threw.
+    await failed(at, error, true);
 
     // Our own budget ran out, not the network's. Distinguishable because the
     // SDK throws this only for a caller-supplied signal — a timeout throws

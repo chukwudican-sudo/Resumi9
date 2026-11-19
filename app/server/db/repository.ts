@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, lte, notInArray, sql } from 
 import { db } from './client';
 import type { ResumeStructure } from '../../lib/types';
 import { DAILY_CREDITS, nextReset } from '../../lib/credits';
+import type { Fault, Stage } from '../../lib/failures';
 import { splitEmployment } from '../../lib/employment';
 import { entriesFromStructure, factsFromStructure, sectionsFromStructure } from '../../lib/importRows';
 import { contentOf, sectionFromRow, shapeOf } from '../../lib/sections';
@@ -10,6 +11,7 @@ import {
   applications,
   documents,
   facts,
+  failures,
   interviewSessions,
   interviewTurns,
   jobPostings,
@@ -2125,6 +2127,71 @@ export { newId };
  * table is what the spend ceiling reads, and a ceiling computed from an
  * incomplete record is not a ceiling.
  */
+/**
+ * Opens an attempt row, before anything can go wrong.
+ *
+ * Written at the START so a request the platform kills still leaves a trace:
+ * a serverless timeout runs no catch block, and the failure that looks like
+ * nothing at all is the one worth seeing. An attempt whose `finishedAt` is
+ * still null long after it began is one of those.
+ *
+ * Never throws. Logging is not worth failing a request that might still
+ * succeed, and a logger that can take the route down is worse than no
+ * logger — this table exists to observe failures, not to cause them.
+ */
+export async function beginAttempt(
+  userId: string,
+  attempt: { kind: string; applicationId?: string | null; stage?: Stage },
+): Promise<number | null> {
+  try {
+    const [row] = await db
+      .insert(failures)
+      .values({
+        userId,
+        applicationId: attempt.applicationId ?? null,
+        kind: attempt.kind,
+        stage: attempt.stage ?? 'model',
+      })
+      .returning({ id: failures.id });
+    return row?.id ?? null;
+  } catch (err) {
+    console.error('[Resumi9] Could not open an attempt row:', err);
+    return null;
+  }
+}
+
+/**
+ * Closes it, however it ended.
+ *
+ * `ok` is the whole point of the pair: a row that finished well is as much
+ * evidence as one that did not, because a failure RATE needs a denominator
+ * and inferring it from another table is what made the September failures
+ * take three rounds to find.
+ *
+ * Never throws, for the same reason as above.
+ */
+export async function endAttempt(
+  id: number | null,
+  outcome: { ok: boolean; stage: Stage; fault?: Fault | null; reason?: string | null; refunded?: boolean },
+): Promise<void> {
+  if (id === null) return;
+  try {
+    await db
+      .update(failures)
+      .set({
+        ok: outcome.ok,
+        stage: outcome.stage,
+        fault: outcome.fault ?? null,
+        reason: outcome.reason ?? null,
+        refunded: outcome.refunded ?? false,
+        finishedAt: new Date(),
+      })
+      .where(eq(failures.id, id));
+  } catch (err) {
+    console.error('[Resumi9] Could not close an attempt row:', err);
+  }
+}
+
 export async function recordUsage(
   userId: string,
   event: {

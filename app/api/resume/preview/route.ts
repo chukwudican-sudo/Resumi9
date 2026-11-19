@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { renderResumeLatex } from '../../../lib/latexEngine';
 import { checkReadiness } from '../../../lib/readiness';
 import { requireUserId } from '../../../server/auth';
+import { beginAttempt, endAttempt } from '../../../server/db/repository';
+import { faultOf, sanitise } from '../../../lib/failures';
 import { LatexCompileError, compileToPdf } from '../../../server/pdf';
 import { resolveResume } from '../../../server/resolveResume';
 
@@ -70,6 +72,12 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
+    // Same as the download: a preview nobody could build is a failure the
+    // person saw, whether or not they were about to send the file.
+    await endAttempt(
+      await beginAttempt(userId, { kind: 'preview', applicationId, stage: 'compile' }),
+      { ok: false, stage: 'compile', fault: faultOf(err, 'compile'), reason: sanitise(err) },
+    );
     if (err instanceof LatexCompileError) {
       // Busy is not broken: the service holds two slots and refuses the third,
       // which a retry a moment later gets past. Saying "on us, it has been

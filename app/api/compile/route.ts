@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { renderResumeLatex } from '../../lib/latexEngine';
 import { checkReadiness } from '../../lib/readiness';
 import { requireUserId } from '../../server/auth';
+import { beginAttempt, endAttempt } from '../../server/db/repository';
+import { faultOf, sanitise } from '../../lib/failures';
 import { LatexCompileError, compileToPdf } from '../../server/pdf';
 import { resolveResume } from '../../server/resolveResume';
 
@@ -72,6 +74,16 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
+    /*
+     * A compile that never produced a PDF. Logged for everybody, including
+     * the busy case — "too many at once" is the kind of thing that is
+     * invisible until somebody counts it, and it is the one error shape a
+     * real user has plausibly met without anyone knowing.
+     */
+    await endAttempt(
+      await beginAttempt(userId, { kind: 'compile', applicationId: typeof applicationId === 'string' ? applicationId : null, stage: 'compile' }),
+      { ok: false, stage: 'compile', fault: faultOf(err, 'compile'), reason: sanitise(err) },
+    );
     if (err instanceof LatexCompileError) {
       if (err.kind === 'busy') {
         // Transient, and it says so. Reported as a logged bug until now, which

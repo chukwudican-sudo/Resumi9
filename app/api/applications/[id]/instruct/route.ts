@@ -15,12 +15,15 @@ import { renderResumeLatex } from '../../../../lib/latexEngine';
 import { compileWithMeta } from '../../../../server/pdf';
 import { COMPILE_ESTIMATE_MS, affords } from '../../../../lib/budget';
 import { limitPhrase, pageLimit, type RuleCheck } from '../../../../lib/rules';
+import { faultOf, sanitise, type Stage } from '../../../../lib/failures';
 import { frozenLine, onlyWhereAsked, readScope } from '../../../../lib/scope';
 import { surfaceRepairs, validateTailored, withoutUndoneClaims } from '../../../../lib/tailorGuard';
 import type { ResumeStructure } from '../../../../lib/types';
 import { requireUserId } from '../../../../server/auth';
 import {
+  beginAttempt,
   countInstructedSince,
+  endAttempt,
   getActiveRules,
   getApplication,
   getLatestResume,
@@ -151,6 +154,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
   }
 
+  /*
+   * The attempt row, for the same reason the tailor has one.
+   *
+   * An edit costs no credit, so there is nothing to refund and nothing to
+   * pair against — but the 502s reported on 6 and 16 November all lived
+   * here, and they are the history most worth being able to see. Opened once
+   * the request is known to be about a real application, so a 404 does not
+   * become a failure of this person's edit.
+   */
+  const attempt = await beginAttempt(userId, { kind: 'instruct', applicationId: params.id, stage: 'model' });
+  let at: Stage = 'model';
+  const failed = async (stage: Stage, error: unknown) => {
+    await endAttempt(attempt, { ok: false, stage, fault: faultOf(error, stage), reason: sanitise(error) });
+  };
+  /** A question or an edit: both are the request working, not failing. */
+  const finished = async () => endAttempt(attempt, { ok: true, stage: 'done' });
+
   const structure = current.structure as ResumeStructure;
   const profileStructure = (profile?.resumeStructure ?? null) as ResumeStructure | null;
   const posting = record.posting;
@@ -224,6 +244,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * itself; the model is asked to notice the rest.
    */
   if (!answer && asked.ask) {
+    await finished();
     return NextResponse.json({ question: asked.ask, editsLeft: FREE_EDITS - spent });
   }
 
@@ -249,6 +270,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const available = couldComeBack(kept, profileStructure, structure);
   const asking = readRestore(instruction, available, answer);
   if (asking && 'ask' in asking && !answer) {
+    await finished();
     return NextResponse.json({ question: asking.ask, editsLeft: FREE_EDITS - spent });
   }
   const restore = asking && 'restore' in asking ? asking.restore : null;
@@ -326,9 +348,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   if (restore && restore.only) {
-    return NextResponse.json(
-      await restoreOnly(restore, [`You asked: "${instruction}"`, restoreLine(restore.entries)]),
-    );
+    const done = await restoreOnly(restore, [`You asked: "${instruction}"`, restoreLine(restore.entries)]);
+    await finished();
+    return NextResponse.json(done);
   }
 
   /*
@@ -346,7 +368,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   const read = readMove(instruction, structure, answer);
   if (read && 'ask' in read) {
-    if (!answer) return NextResponse.json({ question: read.ask, editsLeft: FREE_EDITS - spent });
+    if (!answer) {
+      await finished();
+      return NextResponse.json({ question: read.ask, editsLeft: FREE_EDITS - spent });
+    }
   }
   const move = read && 'move' in read ? read.move : null;
   const reordered = move ? withSectionMoved(planSections(structure), move.key, move.where, move.target) : null;
@@ -371,6 +396,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       dropped: (current.dropped as unknown[]) ?? [],
       mode: 'instructed',
     });
+    await finished();
     return NextResponse.json({ resumeId, editsLeft: FREE_EDITS - spent - 1 });
   }
 
@@ -545,11 +571,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             ? []
             : ['The rest of that instruction needs another go — ask again and it will be read against this version.']),
         ]);
+        await finished();
         return NextResponse.json(done);
       }
       if (asking) {
         // Without the list of entries it read back off its own prompt. The app
         // stopped naming them; the model started.
+        await finished();
         return NextResponse.json({ question: tidyQuestion(asking, structure), editsLeft: FREE_EDITS - spent });
       }
       /*
@@ -560,6 +588,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
        * fault to report and no retry that would behave differently.
        */
       console.error('[Resumi9] Instruct returned neither a structure nor a question.');
+      await failed('model', new Error('Neither a structure nor a question came back'));
       return errorResponse(
         {
           type: 'generic',
@@ -569,6 +598,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       );
     }
 
+    at = 'unreadable';
     const resolved = resolveTailored(toolInput.structure, index);
 
     /*
@@ -581,6 +611,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     if (unreadable(resolved.bullets)) {
       console.error('[Resumi9] Instruct came back in a shape we could not read; nothing changed.');
+      await failed('unreadable', new Error('No changed bullet resolved to a source'));
       return errorResponse(
         { type: 'generic', message: 'That came back in a shape we could not read, so nothing was changed. Try again.' },
         502,
@@ -605,12 +636,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         ...supporting.map((fact) => fact.text),
       ]),
     );
+    at = 'honesty_emptied';
     const honest = applyFlags(resolved.structure, flags, 'the previous version');
 
     // The source here is the version on screen, not the profile — so the guard
     // is told to say so. "Restored from your profile, unedited" was untrue on
     // every edit, and visibly so: the restored entries came back carrying the
     // previous tailoring's wording.
+    at = 'guard_unusable';
     const guarded = validateTailored(structure, honest.structure, {
       sourceLabel: 'the previous version',
       asked,
@@ -637,6 +670,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // so beats saving a version whose whole change log is "we put this back".
     if (guarded.unusable) {
       console.error('[Resumi9] Instruct returned nothing that matched the current version.');
+      await failed('guard_unusable', new Error('No entry matched the version being edited'));
       return errorResponse(
         { type: 'generic', message: 'That edit came back unusable, so nothing was changed. Try again.' },
         502,
@@ -789,6 +823,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (JSON.stringify(fitted) === JSON.stringify(structure)) {
       const why = [...surfaced.log, ...honest.log, ...(held.frozen.length ? [frozenLine(held.frozen, scope.named)] : [])];
       console.error('[Resumi9] An edit resolved to no change at all.');
+      // Not a failure: every pass declined, which is a legitimate outcome.
+      await endAttempt(attempt, { ok: true, stage: 'done', reason: 'resolved to no change' });
       return NextResponse.json(
         {
           noChange: true,
@@ -804,6 +840,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const carriedGaps = (current.missingRequirements as string[]) ?? [];
     const gaps = gapsAfterEdit(carriedGaps, fitted, requirements);
 
+    at = 'save';
     const resumeId = await saveResume(userId, params.id, {
       structure: fitted,
       /*
@@ -919,12 +956,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * looking at it. The instruction travels with it so the second try does
      * not depend on the box still holding what they typed.
      */
+    await finished();
     return NextResponse.json({
       resumeId,
       editsLeft: FREE_EDITS - spent - 1,
       ...(held.frozen.length ? { held: { frozen: held.frozen, instruction } } : {}),
     });
   } catch (error) {
+    await failed(at, error);
     const refused = capacityResponse(error);
     if (refused) return refused;
     if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {

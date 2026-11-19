@@ -487,6 +487,62 @@ export const documents = pgTable('documents', {
  * reads — the mechanism that stops one script becoming a very expensive
  * morning.
  */
+/**
+ * Every attempt at the four things that can fail, and how each one ended.
+ *
+ * `usage_events` means "a model call completed and was billed" — that is what
+ * makes it a usable spend ledger, and putting failures in it would break the
+ * one table that currently tells the truth about cost. So this is separate,
+ * and it answers a different question: what happened to the person.
+ *
+ * Six real users' tailors failed in September and the only way to find them
+ * was to infer from ABSENCE — a billed usage event with no resume beside it.
+ * Which stage failed, and whether the credit went back, could not be
+ * recovered at all. That is the whole reason this exists.
+ *
+ * **A row is written when the attempt STARTS**, not when it fails. A request
+ * the platform kills — a serverless timeout, an instance recycled mid-flight
+ * — runs no catch block and would otherwise leave nothing at all, which is
+ * exactly the failure worth seeing. An attempt with `finishedAt` still null
+ * long after it began is one of those.
+ *
+ * **Nothing here carries the person's work.** No bullet, no posting, no
+ * resume text, not even inside an error message — see `sanitise` in
+ * lib/failures.ts. A failure log holding somebody's history is a second copy
+ * of their resume in a table nobody audits.
+ */
+export const failures = pgTable('failures', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** Which application it was about, where there was one. */
+  applicationId: text('application_id').references(() => applications.id, { onDelete: 'cascade' }),
+  /** tailor | instruct | compile | preview */
+  kind: text('kind').notNull(),
+  /**
+   * How far it got: limits, model, unreadable, guard_unusable, honesty_emptied,
+   * fit, compile, save — or `done` once it finished.
+   *
+   * The point of the table. A catch block cannot tell which of `fitToPages`
+   * and `saveResume` threw into it, so the route updates this as it goes.
+   */
+  stage: text('stage').notNull(),
+  /** app | model | user | upstream — whether anyone should act on it. */
+  fault: text('fault'),
+  /** The error's class and first line, with anything resume-shaped removed. */
+  reason: text('reason'),
+  /** Whether the credit went back. The first question anybody asks. */
+  refunded: boolean('refunded').notNull().default(false),
+  /** Null while in flight. A row still null long after is a killed request. */
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  /** Whether it ended well. Null while in flight. */
+  ok: boolean('ok'),
+  createdAt: createdAt(),
+}, (t) => ({
+  userIdx: index('failures_user_idx').on(t.userId, t.createdAt),
+  /** For "what is failing lately", which reads across users. */
+  recentIdx: index('failures_recent_idx').on(t.createdAt),
+}));
+
 export const usageEvents = pgTable('usage_events', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
