@@ -2426,21 +2426,60 @@ export interface FeedbackRow {
  * list is a page nobody can open on a phone.
  */
 export async function listFeedbackAcrossUsers(limit = 200, on: Executor = db): Promise<FeedbackRow[]> {
-  const rows = await on.execute(sql`
-    select f.id, f.user_id, f.email, u.email as account_email, f.application_id,
-           f.kind, f.message, f.page_url, f.user_agent, f.viewport, f.app_version,
-           f.attempt_id, f.seen_at, f.created_at,
-           a.stage, a.fault, a.reason, a.refunded, a.ok
-    from feedback f
-    left join users u on u.id = f.user_id
-    left join failures a on a.id = f.attempt_id
-    -- The id breaks the tie. Two reports with the same timestamp have no
-    -- order at all under created_at alone, so the list could come back
-    -- shuffled between one page load and the next, which in a list somebody
-    -- reads top to bottom looks like rows appearing and disappearing.
-    order by f.created_at desc, f.id desc
-    limit ${limit}
-  `) as unknown as Record<string, unknown>[];
+  /*
+   * The query builder, not hand-written SQL, and the difference is not style.
+   *
+   * This was a raw `db.execute`, whose rows come back as the driver gives
+   * them: a `timestamptz` arrives as a STRING. The mapping back to
+   * `FeedbackRow` papered over that with `r.created_at as Date` — a cast,
+   * which is a promise to the typechecker and not a conversion — so the inbox
+   * typechecked, passed its self-test, and threw `createdAt.getTime is not a
+   * function` on the first real row it was given.
+   *
+   * Built this way the column mappers run, `createdAt` is a Date because the
+   * schema says it is a timestamp, and there is no cast anywhere to lie in.
+   * The self-test could have caught the old version and did not; the reason
+   * it could not catch the class of bug is that a cast makes the wrong type
+   * invisible to everything except the code that finally calls a method on it.
+   *
+   * **This had already happened here once.** `toDate` above exists because
+   * `listApplicationsForDisplay` threw "from.getTime is not a function" on
+   * the page listing every application, for exactly this reason, and its
+   * comment says so. The lesson was written down and the next raw query made
+   * the same promise anyway. Where a schema-based select will do, it is the
+   * better answer than remembering to convert — there is nothing to remember.
+   */
+  const rows = await on
+    .select({
+      id: feedback.id,
+      userId: feedback.userId,
+      email: feedback.email,
+      accountEmail: users.email,
+      applicationId: feedback.applicationId,
+      kind: feedback.kind,
+      message: feedback.message,
+      pageUrl: feedback.pageUrl,
+      userAgent: feedback.userAgent,
+      viewport: feedback.viewport,
+      appVersion: feedback.appVersion,
+      attemptId: feedback.attemptId,
+      seenAt: feedback.seenAt,
+      createdAt: feedback.createdAt,
+      stage: failures.stage,
+      fault: failures.fault,
+      reason: failures.reason,
+      refunded: failures.refunded,
+      ok: failures.ok,
+    })
+    .from(feedback)
+    .leftJoin(users, eq(users.id, feedback.userId))
+    .leftJoin(failures, eq(failures.id, feedback.attemptId))
+    // The id breaks the tie. Two reports with the same timestamp have no
+    // order at all under created_at alone, so the list could come back
+    // shuffled between one page load and the next, which in a list somebody
+    // reads top to bottom looks like rows appearing and disappearing.
+    .orderBy(desc(feedback.createdAt), desc(feedback.id))
+    .limit(limit);
 
   if (!rows.length) return [];
 
@@ -2452,35 +2491,29 @@ export async function listFeedbackAcrossUsers(limit = 200, on: Executor = db): P
       byteSize: feedbackShots.byteSize,
     })
     .from(feedbackShots)
-    .where(inArray(feedbackShots.feedbackId, rows.map((r) => String(r.id))));
+    .where(inArray(feedbackShots.feedbackId, rows.map((r) => r.id)));
 
   return rows.map((r) => ({
-    id: String(r.id),
-    userId: (r.user_id as string | null) ?? null,
-    email: (r.email as string | null) ?? null,
-    accountEmail: (r.account_email as string | null) ?? null,
-    applicationId: (r.application_id as string | null) ?? null,
-    kind: String(r.kind),
-    message: String(r.message),
-    pageUrl: (r.page_url as string | null) ?? null,
-    userAgent: (r.user_agent as string | null) ?? null,
-    viewport: (r.viewport as string | null) ?? null,
-    appVersion: (r.app_version as string | null) ?? null,
-    attemptId: r.attempt_id == null ? null : Number(r.attempt_id),
-    seenAt: (r.seen_at as Date | null) ?? null,
-    createdAt: r.created_at as Date,
+    id: r.id,
+    userId: r.userId,
+    email: r.email,
+    accountEmail: r.accountEmail,
+    applicationId: r.applicationId,
+    kind: r.kind,
+    message: r.message,
+    pageUrl: r.pageUrl,
+    userAgent: r.userAgent,
+    viewport: r.viewport,
+    appVersion: r.appVersion,
+    attemptId: r.attemptId,
+    seenAt: r.seenAt,
+    createdAt: r.createdAt,
     attempt: r.stage
-      ? {
-          stage: String(r.stage),
-          fault: (r.fault as string | null) ?? null,
-          reason: (r.reason as string | null) ?? null,
-          refunded: Boolean(r.refunded),
-          ok: (r.ok as boolean | null) ?? null,
-        }
+      ? { stage: r.stage, fault: r.fault, reason: r.reason, refunded: Boolean(r.refunded), ok: r.ok }
       : null,
     shots: shots
-      .filter((s) => s.feedbackId === String(r.id))
-      .map((s) => ({ id: s.id, contentType: s.contentType, byteSize: s.byteSize })),
+      .filter((shot) => shot.feedbackId === r.id)
+      .map((shot) => ({ id: shot.id, contentType: shot.contentType, byteSize: shot.byteSize })),
   }));
 }
 

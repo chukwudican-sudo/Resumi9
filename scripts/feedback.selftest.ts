@@ -108,7 +108,7 @@ function chunk(type: string, body: Buffer): Buffer {
   return Buffer.concat([head, typed, crc]);
 }
 
-function png(width: number, height: number): Buffer {
+export function png(width: number, height: number): Buffer {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -260,6 +260,23 @@ async function checks(tx: Executor, stamp: number): Promise<void> {
   ok('and their sizes, without reading the bytes', mine?.shots.some((s) => s.byteSize === image.byteLength) === true);
   ok('a row with no screenshots lists none', theirs?.shots.length === 0);
   ok('newlines survive the round trip', mine?.message.includes('\nSecond line.') === true);
+  /*
+   * The check that was missing, and the reason the inbox shipped broken.
+   *
+   * Every query passed and every value was the right value; `createdAt` was
+   * a STRING wearing a `Date` type, because the mapping cast it instead of
+   * converting it. Nothing here noticed, because nothing here ever called a
+   * method on it — asserting a row "came back" only proves the row came
+   * back. The page called `.getTime()` and threw on the first real row.
+   */
+  ok('createdAt is a Date, not a string wearing the type',
+    mine?.createdAt instanceof Date && !Number.isNaN(mine.createdAt.getTime()),
+    Object.prototype.toString.call(mine?.createdAt));
+  await markFeedbackSeen(signedIn.id, true, tx);
+  const seen = (await listFeedbackAcrossUsers(200, tx)).find((r) => r.id === signedIn.id)?.seenAt;
+  ok('and so is seenAt once it is set', seen instanceof Date && !Number.isNaN(seen.getTime()),
+    Object.prototype.toString.call(seen));
+  await markFeedbackSeen(signedIn.id, false, tx);
 
   // ── the bytes ───────────────────────────────────────────────────────────
   console.log('\n── the image, byte for byte');

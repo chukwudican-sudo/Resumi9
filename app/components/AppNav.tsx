@@ -1,6 +1,8 @@
 import NavTabs, { type NavKey } from './NavTabs';
 import UserMenu from './UserMenu';
 import { creditsLabel } from '../lib/credits';
+import { currentUserId } from '../server/auth';
+import { isAdmin } from '../server/feedback';
 
 export type { NavKey } from './NavTabs';
 
@@ -12,7 +14,16 @@ export type { NavKey } from './NavTabs';
  * putting a one-time flow in permanent navigation is how an app ends up feeling
  * like a settings menu.
  */
-export default function AppNav({ active, credits }: { active: NavKey; credits?: number }) {
+export default async function AppNav({ active, credits }: { active: NavKey; credits?: number }) {
+  /*
+   * Asked here rather than passed in by each page, so a page added later
+   * cannot forget it. Costs one primary-key lookup per render when an
+   * allowlist is configured, and nothing at all when one is not — `isAdmin`
+   * returns before touching the database if RESUMI_ADMIN_EMAILS is unset,
+   * which is every deploy that has no admin.
+   */
+  const admin = await isAdmin(await currentUserId());
+
   return (
     <header className="flex h-[62px] items-center justify-between border-b border-rule bg-ground-surface px-9">
       <NavTabs active={active} />
@@ -33,7 +44,7 @@ export default function AppNav({ active, credits }: { active: NavKey; credits?: 
             {creditsLabel(credits)}
           </span>
         ) : null}
-        <UserMenu />
+        <UserMenu admin={admin} />
       </div>
     </header>
   );

@@ -30,7 +30,7 @@ import { UserButton } from '@clerk/nextjs';
  * placeholder and the real thing arrives a tick later, which is invisible next
  * to the avatar image loading anyway.
  */
-export default function UserMenu() {
+export default function UserMenu({ admin = false }: { admin?: boolean }) {
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
 
@@ -48,10 +48,27 @@ export default function UserMenu() {
       */}
       <UserButton.MenuItems>
         <UserButton.Link label="Account" href="/account" labelIcon={<AccountIcon />} />
+        {/*
+          Only for the accounts that can open it. Not a security control —
+          /admin/feedback answers 404 to everybody else whether or not they
+          were shown a link — but the page holds other people's words, and
+          offering a door to somebody who will be told it does not exist is
+          its own kind of wrong.
+        */}
+        {admin ? <UserButton.Link label="Inbox" href="/admin/feedback" labelIcon={<InboxIcon />} /> : null}
         <UserButton.Action label="manageAccount" />
         <UserButton.Action label="signOut" />
       </UserButton.MenuItems>
     </UserButton>
+  );
+}
+
+/** The same speech mark the feedback button carries, so they read as one thing. */
+function InboxIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-4.1-.9L3 21l1.9-4.3A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z" />
+    </svg>
   );
 }
 
