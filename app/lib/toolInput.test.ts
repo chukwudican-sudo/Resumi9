@@ -116,3 +116,69 @@ test('an answer that is not an object at all does not throw', () => {
   assert.deepEqual(recoverToolInput(undefined, TAILOR), { input: {}, repaired: [] });
   assert.deepEqual(recoverToolInput('nonsense', TAILOR), { input: {}, repaired: [] });
 });
+
+// ── a model that nests its answer inside the field it was asked for ───────
+//
+// Observed live: asked for `asks` as an array, a model returned the STRING
+// `{"asks":[…]}`. Recovery parsed it, saw an object, and stored the object —
+// so the field held `{asks:[…]}` where an array belonged. The schema says
+// array; `typeof own === 'object'` is true for an object as well, and that
+// was the whole gap.
+
+test('an array field nested inside itself is unwrapped', () => {
+  /*
+   * On the tailor this is `cutOrder`, and it fails SILENTLY: cutTargets
+   * reads an object, finds nothing to rank, and the fitter cuts without any
+   * reference to the posting. The resume still saves. The only trace is the
+   * "cut ranking covered 0 of N" line nobody is reading.
+   */
+  const { input, repaired } = recoverToolInput(
+    { structure: { experience: [] }, cutOrder: JSON.stringify({ cutOrder: ['p1', 'e0.b1'] }), log: [], warnings: [] },
+    TAILOR,
+  );
+  assert.ok(Array.isArray(input.cutOrder), `cutOrder came back as ${typeof input.cutOrder}`);
+  assert.deepEqual(input.cutOrder, ['p1', 'e0.b1']);
+  assert.ok(repaired.includes('cutOrder'));
+});
+
+test('an object field nested inside itself is unwrapped', () => {
+  /*
+   * On the tailor this is `structure`, and it costs the whole answer:
+   * resolveTailored finds no bullets, `unreadable` returns false because
+   * there is nothing to judge, the guard pairs nothing and calls it
+   * unusable, and the person gets a refunded 502 — for a resume that was
+   * sitting intact inside the string. Recovering it is the entire purpose
+   * of this file.
+   */
+  const resume = { summary: 'x', experience: [{ id: 'e0', bullets: [{ from: ['e0.b0'] }] }], projects: [], education: [], skills: [] };
+  const { input, repaired } = recoverToolInput(
+    { structure: JSON.stringify({ structure: resume }), cutOrder: ['p1'], log: [], warnings: [] },
+    TAILOR,
+  );
+  assert.deepEqual(input.structure, resume, 'the resume should be recovered, not the wrapper around it');
+  assert.ok(repaired.includes('structure'));
+});
+
+test('a wrapper under any other name is left alone', () => {
+  // Only a wrapper named for the field itself is a wrapper. An object that
+  // happens to have one key is somebody's data.
+  const { input } = recoverToolInput(
+    { structure: JSON.stringify({ experience: [{ id: 'e0', bullets: [] }] }), cutOrder: [], log: [], warnings: [] },
+    TAILOR,
+  );
+  assert.deepEqual(input.structure, { experience: [{ id: 'e0', bullets: [] }] });
+});
+
+test('an array field given a foreign object is refused, not stored', () => {
+  /*
+   * The other half of the same bug. Storing an object where the schema asks
+   * for an array is how a silent failure reaches the fitter; leaving the
+   * string alone keeps the honest "came back unusable" instead.
+   */
+  const { input, repaired } = recoverToolInput(
+    { structure: { experience: [] }, cutOrder: JSON.stringify({ somethingElse: ['p1'] }), log: [], warnings: [] },
+    TAILOR,
+  );
+  assert.ok(!repaired.includes('cutOrder'), 'nothing fit the schema, so nothing was claimed as repaired');
+  assert.equal(typeof input.cutOrder, 'string', 'left as it came');
+});

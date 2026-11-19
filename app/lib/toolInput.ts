@@ -109,6 +109,50 @@ function asType(text: string, type: string | undefined): unknown {
 }
 
 /**
+ * Whether a recovered value is actually the type the schema asked for.
+ *
+ * `typeof x === 'object'` is true for an array as well, which is how an
+ * object came to be stored in a field declared `array`. Observed live: a
+ * model answered a field typed `array` with the string `{"asks":[…]}`, the
+ * parse produced an object, the object passed that test, and the field held
+ * the wrong type from then on. Nothing downstream re-checked.
+ *
+ * On the tailor the two cases diverge and both are bad. `cutOrder` holding
+ * an object fails SILENTLY — the cut ranking reads as empty, the fitter cuts
+ * without reference to the posting, and the resume still saves. `structure`
+ * holding a wrapper costs the whole answer: no bullets resolve, the guard
+ * pairs nothing, and the person gets a refunded 502 for a resume that was
+ * intact inside the string.
+ */
+function fits(value: unknown, type: string | undefined): boolean {
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return value !== undefined;
+}
+
+/**
+ * A field that arrived wrapped in its own name, unwrapped.
+ *
+ * `{"cutOrder": […]}` in the field `cutOrder` is the model answering the
+ * question with the question attached. Only a wrapper named for the field
+ * itself counts — an object that merely happens to have one key is somebody's
+ * data, and unwrapping that would be inventing a different answer.
+ *
+ * Bounded rather than recursive: a model that wraps twice is still read, and
+ * a value that is somehow its own name all the way down cannot hang this.
+ */
+function unwrapSelf(value: unknown, name: string): unknown {
+  let out = value;
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (typeof out !== 'object' || out === null || Array.isArray(out)) return out;
+    const keys = Object.keys(out as Record<string, unknown>);
+    if (keys.length !== 1 || keys[0] !== name) return out;
+    out = (out as Record<string, unknown>)[name];
+  }
+  return out;
+}
+
+/**
  * The tool's answer with every recoverable field in its own place.
  *
  * `repaired` names what was rebuilt, so the caller can log it: a recovery that
@@ -138,8 +182,8 @@ export function recoverToolInput(
     // This field's own value is everything before the first marker.
     const markers = [value.indexOf(CLOSE), value.indexOf(OPEN)].filter((i) => i >= 0);
     const head = markers.length ? value.slice(0, Math.min(...markers)) : value;
-    const own = asType(head, type);
-    if (own !== undefined && (!structured || (typeof own === 'object' && own !== null))) {
+    const own = unwrapSelf(asType(head, type), name);
+    if (own !== undefined && fits(own, type)) {
       out[name] = own;
       repaired.push(name);
     }
@@ -149,8 +193,11 @@ export function recoverToolInput(
       // Never overwrite a field that arrived properly, and never invent one the
       // tool does not have.
       if (other === name || other in given || !(other in properties) || other in out) continue;
-      const recovered = asType(text, typeOf(properties[other]));
-      if (recovered === undefined) continue;
+      const otherType = typeOf(properties[other]);
+      const recovered = unwrapSelf(asType(text, otherType), other);
+      // The same type check as above: a field rescued from inside another is
+      // no more trustworthy than one that arrived in its own place.
+      if (recovered === undefined || !fits(recovered, otherType)) continue;
       out[other] = recovered;
       repaired.push(other);
     }
