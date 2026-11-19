@@ -33,9 +33,26 @@ export async function isAdmin(userId: string | null): Promise<boolean> {
   if (!userId) return false;
   const allowed = adminEmails();
   if (!allowed.length) return false;
-  const user = await getUser(userId);
-  const email = user?.email?.trim().toLowerCase();
-  return Boolean(email && allowed.includes(email));
+  try {
+    const user = await getUser(userId);
+    const email = user?.email?.trim().toLowerCase();
+    return Boolean(email && allowed.includes(email));
+  } catch (error) {
+    /*
+     * Never throws, and failing closed is correct at every call site.
+     *
+     * The inbox and the screenshot route read this to decide whether to
+     * answer at all, so an error becoming `false` means a 404 — the safe
+     * direction. The nav bar reads it to decide whether to offer a link, and
+     * there an unhandled throw would be far worse than a missing link: the
+     * bar renders on four signed-in pages, so one bad query would take all
+     * four down at once. The root layout guards `syncCurrentUser` for the
+     * same reason, and this became a database call on those pages the moment
+     * the link was added to it.
+     */
+    console.error('[Resumi9] Could not check admin access; treating as not an admin.', error);
+    return false;
+  }
 }
 
 /**
