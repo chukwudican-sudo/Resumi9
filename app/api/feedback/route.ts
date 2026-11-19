@@ -55,12 +55,18 @@ export async function POST(request: NextRequest) {
   try {
     form = await request.formData();
   } catch {
-    // A body over the platform's request cap never reaches here as a parseable
-    // form. Saying so beats "something went wrong" for the one person whose
-    // screenshots were too big for a limit the panel should have caught.
+    /*
+     * A body this cannot read. Named as a possibility rather than a
+     * diagnosis: this used to answer "that was too large to send", which
+     * reads as a fact and is only a guess — a body genuinely over the
+     * platform's request cap is refused before this handler runs at all, so
+     * what actually lands here is a malformed or mis-typed form. Telling
+     * somebody their screenshots were too big when the real cause was
+     * something else sends them off shrinking images that were fine.
+     */
     return NextResponse.json(
-      { error: 'That was too large to send. Try fewer or smaller screenshots.' },
-      { status: 413 },
+      { error: 'That did not send. If you attached screenshots, try fewer or smaller ones.' },
+      { status: 400 },
     );
   }
 
